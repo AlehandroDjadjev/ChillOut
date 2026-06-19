@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

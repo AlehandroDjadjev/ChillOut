@@ -1,0 +1,279 @@
+:root {
+  color-scheme: light;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  --ink: #172026;
+  --muted: #5c6a72;
+  --surface: #ffffff;
+  --line: #d9e2e7;
+  --field: #f7fafb;
+  --accent: #0f7a8a;
+  --accent-strong: #0a5661;
+  --warn: #8d4f00;
+  --sky: #d9eef4;
+  --leaf: #dce9d5;
+  --coal: #26343b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(217, 238, 244, 0.85), rgba(220, 233, 213, 0.62)),
+    #eef5f3;
+  color: var(--ink);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 32px 0 44px;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 430px);
+  gap: 24px;
+  align-items: start;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  max-width: 760px;
+  margin: 0;
+  color: #102026;
+  font-size: clamp(2rem, 6vw, 4.7rem);
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.lede {
+  max-width: 620px;
+  margin: 18px 0 0;
+  color: var(--coal);
+  font-size: 1.1rem;
+  line-height: 1.55;
+}
+
+.settings-panel,
+.map-meta,
+.moment-card {
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(217, 226, 231, 0.92);
+  border-radius: 8px;
+  box-shadow: 0 18px 44px rgba(23, 32, 38, 0.09);
+}
+
+.settings-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+input,
+select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--ink);
+  padding: 9px 10px;
+}
+
+input:focus,
+select:focus,
+button:focus-visible {
+  outline: 3px solid rgba(15, 122, 138, 0.22);
+  outline-offset: 2px;
+}
+
+.inline-fields {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 12px;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+button {
+  min-height: 42px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 9px 14px;
+}
+
+button[type="button"] {
+  background: #ffffff;
+  color: var(--accent-strong);
+}
+
+button:hover {
+  filter: brightness(0.96);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.status {
+  min-height: 20px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.status.error {
+  color: #9c2f18;
+  font-weight: 700;
+}
+
+.map-meta {
+  margin: 24px 0;
+  padding: 16px 18px;
+}
+
+.map-meta dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+dd {
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+  font-weight: 750;
+}
+
+.moment-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.moment-card {
+  overflow: hidden;
+}
+
+.moment-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+  padding: 14px;
+}
+
+.icon-button {
+  width: 42px;
+  padding: 0;
+}
+
+.image-stage {
+  display: grid;
+  place-items: center;
+  min-height: 310px;
+  background:
+    linear-gradient(135deg, rgba(15, 122, 138, 0.12), rgba(141, 79, 0, 0.11)),
+    #ebf2f1;
+  border-top: 1px solid var(--line);
+}
+
+.image-stage img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+.placeholder {
+  padding: 28px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.card-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.card-footer strong {
+  color: var(--ink);
+}
+
+@media (max-width: 860px) {
+  .toolbar,
+  .moment-grid,
+  .map-meta dl {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    gap: 20px;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell {
+    width: min(100% - 20px, 1180px);
+    padding-top: 20px;
+  }
+
+  .inline-fields,
+  .moment-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .icon-button {
+    width: 100%;
+  }
+}

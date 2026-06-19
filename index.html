@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stara Zagora Sentinel-2 Cloud Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="toolbar" aria-labelledby="app-title">
+        <div>
+          <p class="eyebrow">Copernicus Data Space Ecosystem</p>
+          <h1 id="app-title">Stara Zagora Sentinel-2 Cloud Viewer</h1>
+          <p class="lede">
+            Compare cloud cover around Stara Zagora, Bulgaria across the latest
+            Sentinel-2 L2A acquisitions.
+          </p>
+        </div>
+
+        <form id="settings-form" class="settings-panel">
+          <div class="inline-fields">
+            <label>
+              Max cloud %
+              <input id="max-cloud" min="0" max="100" step="1" type="number" value="100" />
+            </label>
+
+            <label>
+              Render mode
+              <select id="render-mode">
+                <option value="overlay">True color + cloud overlay</option>
+                <option value="mask">Cloud mask</option>
+                <option value="probability">Cloud probability</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="actions">
+            <button id="load-all" type="submit">Load latest 7 images</button>
+          </div>
+
+          <p id="global-status" class="status" role="status">
+            Start the local proxy with your .env credentials, then load imagery.
+          </p>
+        </form>
+      </section>
+
+      <section class="map-meta" aria-label="Area of interest">
+        <dl>
+          <div>
+            <dt>Area</dt>
+            <dd>Stara Zagora, Bulgaria</dd>
+          </div>
+          <div>
+            <dt>Bounding box</dt>
+            <dd id="bbox-label"></dd>
+          </div>
+          <div>
+            <dt>Collection</dt>
+            <dd>sentinel-2-l2a</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section id="moments" class="moment-grid" aria-live="polite"></section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
