@@ -45,6 +45,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 DEFAULT_SERVER_URL = "http://localhost:5173"
 DEFAULT_DAYS = 30
+DEFAULT_YEARS = None
 DEFAULT_CITY_RADIUS_KM = 20.0
 DEFAULT_IMAGE_WIDTH = 256
 DEFAULT_IMAGE_HEIGHT = 256
@@ -127,6 +128,12 @@ def main() -> int:
     parser.add_argument("--out", default="dataset_out", help="Output directory.")
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS, help="Number of days to export.")
     parser.add_argument(
+        "--years",
+        type=int,
+        default=DEFAULT_YEARS,
+        help="If set, export the last N calendar years instead of a fixed day window.",
+    )
+    parser.add_argument(
         "--data-lag-days",
         type=int,
         default=DEFAULT_DATA_LAG_DAYS,
@@ -178,7 +185,13 @@ def main() -> int:
             raise SystemExit(f"Unknown city '{raw_name}'. Valid names: {', '.join(city_lookup)}")
         selected_cities.append(city_lookup[key])
 
-    date_range = build_date_range(args.days, args.data_lag_days, args.end_date)
+    if args.years is not None:
+        date_range = build_date_range_years(args.years, args.data_lag_days, args.end_date)
+        window = {"kind": "years", "value": args.years}
+    else:
+        date_range = build_date_range(args.days, args.data_lag_days, args.end_date)
+        window = {"kind": "days", "value": args.days}
+
     print(f"Building {len(selected_cities)} cities x {len(date_range)} days")
 
     manifest: List[Dict[str, object]] = []
@@ -239,7 +252,10 @@ def main() -> int:
     splits = split_records(manifest)
 
     write_jsonl(out_dir / "dataset.jsonl", manifest)
-    write_json(out_dir / "metadata.json", build_metadata(raw_feature_names, selected_cities, args.days, args.radius_km, date_range))
+    write_json(
+        out_dir / "metadata.json",
+        build_metadata(raw_feature_names, selected_cities, window, args.radius_km, date_range),
+    )
     write_splits(out_dir, splits)
 
     if not args.skip_torch:
@@ -280,6 +296,34 @@ def build_date_range(days: int, data_lag_days: int = DEFAULT_DATA_LAG_DAYS, end_
     return [
         (end - dt.timedelta(days=offset)).isoformat()
         for offset in range(days - 1, -1, -1)
+    ]
+
+
+def build_date_range_years(
+    years: int,
+    data_lag_days: int = DEFAULT_DATA_LAG_DAYS,
+    end_date: Optional[str] = None,
+) -> List[str]:
+    if years < 1:
+        raise SystemExit("--years must be at least 1.")
+
+    if end_date:
+        try:
+            end = dt.date.fromisoformat(end_date)
+        except ValueError as exc:
+            raise SystemExit("--end-date must use YYYY-MM-DD format.") from exc
+    else:
+        end = dt.datetime.now(dt.UTC).date() - dt.timedelta(days=max(1, data_lag_days))
+
+    try:
+        start = end.replace(year=end.year - years)
+    except ValueError:
+        # Handle leap day by stepping back to Feb 28 in the target year.
+        start = end.replace(month=2, day=28, year=end.year - years)
+
+    return [
+        (start + dt.timedelta(days=offset)).isoformat()
+        for offset in range((end - start).days + 1)
     ]
 
 
@@ -706,7 +750,7 @@ def write_splits(out_dir: Path, splits: Dict[str, List[Dict[str, object]]]) -> N
 def build_metadata(
     feature_names: List[str],
     cities: List[City],
-    days: int,
+    window: Dict[str, object],
     radius_km: float,
     date_range: List[str],
 ) -> Dict[str, object]:
@@ -724,7 +768,8 @@ def build_metadata(
             {"name": city.name, "country": city.country, "lat": city.lat, "lon": city.lon}
             for city in cities
         ],
-        "days": days,
+        "days": len(date_range),
+        "export_window": window,
         "radius_km": radius_km,
         "date_range": {"start": date_range[0], "end": date_range[-1]},
         "notes": [
