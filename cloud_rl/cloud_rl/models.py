@@ -82,9 +82,11 @@ class CloudActorCritic(nn.Module):
         h = self.trunk(torch.cat([img, scalars], dim=-1))
         b = obs_map.shape[0]
         op_logits = self.op_head(h).view(b, self.max_actions, 4)
-        param_mu = self.param_mu_head(h).view(b, self.max_actions, self.param_dim).clamp(-5, 5)
-        param_std = self.param_log_std.exp()[None, :, :].expand_as(param_mu)
-        value = self.value_head(h)
+        op_logits = torch.nan_to_num(op_logits, nan=0.0, posinf=20.0, neginf=-20.0).clamp(-20.0, 20.0)
+        param_mu = self.param_mu_head(h).view(b, self.max_actions, self.param_dim)
+        param_mu = torch.nan_to_num(param_mu, nan=0.0, posinf=5.0, neginf=-5.0).clamp(-5.0, 5.0)
+        param_std = self.param_log_std.exp()[None, :, :].expand_as(param_mu).clamp(1e-3, 5.0)
+        value = torch.nan_to_num(self.value_head(h), nan=0.0, posinf=100.0, neginf=-100.0).clamp(-100.0, 100.0)
         return PolicyOutput(op_logits, param_mu, param_std, value)
 
     def sample(self, obs_map: torch.Tensor, features: torch.Tensor, target_temp_norm: torch.Tensor) -> Dict[str, torch.Tensor]:
