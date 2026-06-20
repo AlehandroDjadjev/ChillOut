@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from cloud_rl.actions import rasterize_actions
 from cloud_rl.dataset import CloudFolderDataset, collate_cloud_batch, compute_stats
+from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first_model_checkpoint
 from cloud_rl.models import CloudActorCritic
 from cloud_rl.ppo import RolloutBatch, ppo_update
 from cloud_rl.rewards import DummyMaxReward
@@ -22,6 +23,44 @@ def infinite_loader(loader):
     while True:
         for batch in loader:
             yield batch
+
+
+def resolve_rl_resume_checkpoint(source: str, out_dir: Path) -> Path | None:
+    if source in {"", "none", None}:
+        return None
+
+    if source == "auto":
+        candidates = [out_dir / "policy_latest.pt"]
+        candidates.extend(sorted(out_dir.glob("policy_update_*.pt"), reverse=True))
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return None
+
+    path = Path(source)
+    if path.is_dir():
+        candidates = [path / "policy_latest.pt"]
+        candidates.extend(sorted(path.glob("policy_update_*.pt"), reverse=True))
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"No policy checkpoints found in {path}")
+
+    if path.exists():
+        return path
+
+    raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+
+
+def load_history_tail(out_dir: Path) -> List[Dict]:
+    history_path = out_dir / "history.tail.json"
+    if not history_path.exists():
+        return []
+    try:
+        payload = json.loads(history_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return list(payload.get("history", []))
 
 
 def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.device) -> RolloutBatch:
@@ -64,8 +103,17 @@ def main() -> None:
     parser.add_argument("--data-root", default=None)
     parser.add_argument("--split", default="train", help="Dataset split to use: train, val, test, or all.")
     parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--resume", default="auto", help="Resume from policy_latest.pt, a checkpoint path, or none.")
     parser.add_argument("--write-stats", action="store_true", help="Compute data_root/stats.json before training.")
-    parser.add_argument("--dummy-budget-penalty", type=float, default=0.0)
+    parser.add_argument(
+        "--reward-checkpoint",
+        default="auto",
+        help="First-model checkpoint path, reward run dir, auto, or none for the dummy reward.",
+    )
+    parser.add_argument("--reward-run-dir", default="runs/cloud_temp", help="Directory used when reward-checkpoint=auto.")
+    parser.add_argument("--reward-scale", type=float, default=5.0, help="Temperature error scale for the first-model reward.")
+    parser.add_argument("--reward-budget-penalty", type=float, default=0.0)
+    parser.add_argument("--dummy-budget-penalty", type=float, default=0.0, help="Penalty used only with the dummy reward.")
     args = parser.parse_args()
 
     config_path = resolve_existing_path(args.config)
@@ -109,11 +157,45 @@ def main() -> None:
         hidden_dim=int(pcfg["hidden_dim"]),
     ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(pcfg["lr"]), weight_decay=1e-4)
-    reward_fn = DummyMaxReward(max_score=1.0, optional_budget_penalty=args.dummy_budget_penalty).to(device)
+
+    reward_fn = None
+    if args.reward_checkpoint == "none":
+        reward_fn = DummyMaxReward(max_score=1.0, optional_budget_penalty=args.dummy_budget_penalty).to(device)
+        print("Using dummy reward.")
+    else:
+        reward_source = args.reward_checkpoint
+        if reward_source == "auto":
+            reward_source = str(resolve_existing_path(args.reward_run_dir))
+        reward_ckpt = resolve_first_model_checkpoint(reward_source, prefer_best=True)
+        reward_fn = CloudTempCheckpointReward(
+            reward_ckpt,
+            reward_scale_c=args.reward_scale,
+            optional_budget_penalty=args.reward_budget_penalty,
+        ).to(device)
+        print(f"Using first-model reward checkpoint: {reward_fn.checkpoint_path}")
+
+    resume_ckpt = resolve_rl_resume_checkpoint(args.resume, out_dir)
+    start_update = 1
+    history: List[Dict] = load_history_tail(out_dir)
+    if resume_ckpt is not None:
+        state = torch.load(resume_ckpt, map_location=device)
+        model.load_state_dict(state["model"])
+        if "optimizer" in state:
+            optimizer.load_state_dict(state["optimizer"])
+        start_update = int(state.get("update", 0)) + 1
+        print(f"Resumed RL training from {resume_ckpt} at update {start_update}.")
+    else:
+        print("Starting RL training from scratch.")
 
     train_cfg = cfg["training"]
-    pbar = tqdm(range(1, int(train_cfg["updates"]) + 1), desc="PPO updates")
-    history = []
+    total_updates = int(train_cfg["updates"])
+    if start_update > total_updates:
+        print(
+            f"Checkpoint already reached update {start_update - 1}, which is beyond the configured total {total_updates}."
+        )
+        return
+
+    pbar = tqdm(range(start_update, total_updates + 1), desc="PPO updates")
     for update in pbar:
         rollout = collect_rollout(
             model, reward_fn, loader_iter, steps=int(train_cfg["steps_per_update"]), device=device
