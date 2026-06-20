@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import torch
+import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -70,9 +71,12 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
         "old_log_prob": [], "returns": [], "advantages": [],
     }
     model.eval()
-    for _ in range(steps):
-        batch = to_device(next(loader_iter), device)
-        with torch.no_grad():
+    with torch.inference_mode():
+        for _ in range(steps):
+            batch = to_device(next(loader_iter), device, non_blocking=(device.type == "cuda"))
+            if device.type == "cuda":
+                batch["obs_map"] = batch["obs_map"].contiguous(memory_format=torch.channels_last)
+                batch["original_mask"] = batch["original_mask"].contiguous(memory_format=torch.channels_last)
             sampled = model.sample(batch["obs_map"], batch["features"], batch["target_temp_norm"])
             rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
             reward, _ = reward_fn(
@@ -85,13 +89,13 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
             returns = reward.view(-1, 1)
             advantages = returns - sampled["value"]
 
-        for k in ["obs_map", "features", "target_temp_norm", "original_mask", "raw_features", "target_temp"]:
-            chunks[k].append(batch[k].detach().cpu())
-        chunks["op"].append(sampled["op"].detach().cpu())
-        chunks["params"].append(sampled["params"].detach().cpu())
-        chunks["old_log_prob"].append(sampled["log_prob"].detach().cpu())
-        chunks["returns"].append(returns.detach().cpu())
-        chunks["advantages"].append(advantages.detach().cpu())
+            for k in ["obs_map", "features", "target_temp_norm", "original_mask", "raw_features", "target_temp"]:
+                chunks[k].append(batch[k].detach().cpu())
+            chunks["op"].append(sampled["op"].detach().cpu())
+            chunks["params"].append(sampled["params"].detach().cpu())
+            chunks["old_log_prob"].append(sampled["log_prob"].detach().cpu())
+            chunks["returns"].append(returns.detach().cpu())
+            chunks["advantages"].append(advantages.detach().cpu())
 
     cat = {k: torch.cat(v, dim=0).to(device) for k, v in chunks.items()}
     return RolloutBatch(**cat)
@@ -125,6 +129,11 @@ def main() -> None:
 
     seed_everything(int(cfg.get("seed", 42)))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    if device.type == "cuda":
+        cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
     out_dir = Path(cfg["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
     save_json(cfg, out_dir / "config.resolved.json")
@@ -137,15 +146,21 @@ def main() -> None:
         print(f"Wrote stats to {data_root / 'stats.json'}")
 
     image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
+    num_workers = int(cfg.get("num_workers", 0))
     dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
-    loader = DataLoader(
-        dataset,
-        batch_size=int(cfg["batch_size"]),
-        shuffle=True,
-        num_workers=int(cfg.get("num_workers", 0)),
-        collate_fn=collate_cloud_batch,
-        drop_last=True if len(dataset) >= int(cfg["batch_size"]) else False,
-    )
+    loader_kwargs = {
+        "dataset": dataset,
+        "batch_size": int(cfg["batch_size"]),
+        "shuffle": True,
+        "num_workers": num_workers,
+        "pin_memory": device.type == "cuda",
+        "persistent_workers": num_workers > 0,
+        "collate_fn": collate_cloud_batch,
+        "drop_last": True if len(dataset) >= int(cfg["batch_size"]) else False,
+    }
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = 4
+    loader = DataLoader(**loader_kwargs)
     loader_iter = infinite_loader(loader)
 
     obs_channels = 1 + 14 + 1
@@ -156,6 +171,8 @@ def main() -> None:
         max_actions=int(pcfg["max_actions"]),
         hidden_dim=int(pcfg["hidden_dim"]),
     ).to(device)
+    if device.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(pcfg["lr"]), weight_decay=1e-4)
 
     reward_fn = None
@@ -172,6 +189,8 @@ def main() -> None:
             reward_scale_c=args.reward_scale,
             optional_budget_penalty=args.reward_budget_penalty,
         ).to(device)
+        if device.type == "cuda":
+            reward_fn = reward_fn.to(memory_format=torch.channels_last)
         print(f"Using first-model reward checkpoint: {reward_fn.checkpoint_path}")
 
     resume_ckpt = resolve_rl_resume_checkpoint(args.resume, out_dir)

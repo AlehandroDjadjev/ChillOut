@@ -216,6 +216,8 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         state = _strip_module_prefix(ckpt["model_state"])
         self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
         self.model.load_state_dict(state)
+        if torch.cuda.is_available():
+            self.model = self.model.to(memory_format=torch.channels_last)
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad_(False)
@@ -268,10 +270,16 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         property_maps: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         mask = self._prepare_mask(generated_mask)
+        if mask.ndim == 4 and mask.is_cuda:
+            mask = mask.contiguous(memory_format=torch.channels_last)
         features = self._prepare_features(feature_vector)
 
-        with torch.no_grad():
-            predicted_temperature = self.model(mask, features)
+        with torch.inference_mode():
+            if mask.is_cuda:
+                with torch.autocast(device_type="cuda", enabled=True):
+                    predicted_temperature = self.model(mask, features)
+            else:
+                predicted_temperature = self.model(mask, features)
 
         temp_error = (predicted_temperature - target_temperature.float()).abs()
         reward = torch.exp(-temp_error / max(1e-6, self.reward_scale_c))

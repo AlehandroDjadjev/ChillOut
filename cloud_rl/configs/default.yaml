@@ -13,12 +13,12 @@ policy:
   entropy_coef: 0.01
   value_coef: 0.5
   clip_eps: 0.2
-  ppo_epochs: 4
+  ppo_epochs: 2
   grad_clip: 0.5
 
 training:
   updates: 1000
-  steps_per_update: 32
+  steps_per_update: 8
   save_every: 50
   eval_every: 50
 
