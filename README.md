@@ -75,10 +75,10 @@ npm start
 Then run the exporter:
 
 ```powershell
-python build_temperature_dataset.py --out dataset_out
+python build_temperature_dataset.py --out dataset_out --years 3
 ```
 
-The exporter builds a 30-day, per-city manifest for six Balkan cities by default. It downloads:
+If you omit `--years`, the exporter falls back to the shorter `--days` window. With `--years 3`, it builds a three-year, per-city manifest for six Balkan cities. It downloads:
 
 - Sentinel-2 cloud masks
 - Sentinel-5P cloud and atmospheric statistics
