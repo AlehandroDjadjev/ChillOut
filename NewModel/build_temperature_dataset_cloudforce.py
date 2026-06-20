@@ -114,7 +114,8 @@ CLOUD_FEATURE_NAMES = [
 ]
 
 WORLD_FEATURE_NAMES = [
-    # No temperature inputs.
+    # Current temperature is intentionally NOT a model input in v3.
+    # It is still stored as current_temperature_c for persistence benchmarking.
     # No Open-Meteo cloud-cover inputs.
     # One solar/radiation context only.
     "world_shortwave_radiation",
@@ -821,6 +822,7 @@ def main() -> int:
             "cloud_tensor_path": str(rel_npz).replace("\\", "/"),
             "inputs": {name: float(inputs[name]) for name in RAW_FEATURE_NAMES},
             "feature_vector": [float(inputs[name]) for name in RAW_FEATURE_NAMES],
+            "current_temperature_c": float(weather_now["temperature_2m"]),
             TARGET_FIELD: target_temp,
             "source_notes": {
                 "mask": "Sentinel-2 SCL/CLP cloud-only mask; non-cloud pixels are black.",
@@ -856,8 +858,13 @@ def main() -> int:
         "model_feature_names": RAW_FEATURE_NAMES,
         "cloud_feature_names": CLOUD_FEATURE_NAMES,
         "world_feature_names": WORLD_FEATURE_NAMES,
+        "benchmark_inputs": [
+            "current_temperature_c is stored outside model inputs for a concrete persistence benchmark.",
+            "The model must beat current-temperature persistence without receiving current temperature as an input.",
+        ],
         "removed_shortcuts": [
-            "temperature_2m input",
+            "future temperature target leakage",
+            "current temperature model input",
             "Open-Meteo cloud_cover input",
             "Open-Meteo cloud_cover_low/mid/high input",
             "duplicate direct/diffuse/terrestrial radiation inputs",
