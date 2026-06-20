@@ -95,11 +95,11 @@
     var r = h.r * (0.85 + pulse * 0.25);
     var grd = ctx.createRadialGradient(h.x, h.y, 0, h.x, h.y, r);
     if (h.dry) {
-      grd.addColorStop(0, "rgba(226, 85, 58, " + (0.10 + pulse * 0.08) + ")");
-      grd.addColorStop(1, "rgba(226, 85, 58, 0)");
+      grd.addColorStop(0, "rgba(245, 197, 66, " + (0.10 + pulse * 0.08) + ")");
+      grd.addColorStop(1, "rgba(245, 197, 66, 0)");
     } else {
-      grd.addColorStop(0, "rgba(58, 157, 93, " + (0.10 + pulse * 0.09) + ")");
-      grd.addColorStop(1, "rgba(58, 157, 93, 0)");
+      grd.addColorStop(0, "rgba(52, 211, 192, " + (0.10 + pulse * 0.09) + ")");
+      grd.addColorStop(1, "rgba(52, 211, 192, 0)");
     }
     ctx.fillStyle = grd;
     ctx.beginPath();
@@ -114,9 +114,9 @@
       var by = c.y + Math.sin(t) * c.r * 0.24;
       var br = c.r * rand(0.42, 0.7);
       var g = ctx.createRadialGradient(bx, by, 0, bx, by, br);
-      g.addColorStop(0, "rgba(255, 255, 255, " + c.alpha + ")");
-      g.addColorStop(0.5, "rgba(255, 250, 243, " + c.alpha * 0.55 + ")");
-      g.addColorStop(1, "rgba(255, 250, 243, 0)");
+      g.addColorStop(0, "rgba(220, 238, 240, " + c.alpha * 0.9 + ")");
+      g.addColorStop(0.5, "rgba(180, 214, 220, " + c.alpha * 0.5 + ")");
+      g.addColorStop(1, "rgba(180, 214, 220, 0)");
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.arc(bx, by, br, 0, Math.PI * 2);
@@ -125,7 +125,7 @@
   }
 
   function drawDrop(p) {
-    ctx.strokeStyle = "rgba(90, 140, 170, " + p.a * 0.7 + ")";
+    ctx.strokeStyle = "rgba(120, 185, 205, " + p.a * 0.7 + ")";
     ctx.lineWidth = 1.1;
     ctx.beginPath();
     ctx.moveTo(p.x, p.y);
@@ -134,7 +134,7 @@
   }
 
   function drawFlake(p) {
-    ctx.fillStyle = "rgba(150, 180, 205, " + p.a * 0.6 + ")";
+    ctx.fillStyle = "rgba(190, 215, 230, " + p.a * 0.7 + ")";
     ctx.beginPath();
     ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
     ctx.fill();
@@ -144,7 +144,7 @@
     ctx.clearRect(0, 0, W, H);
 
     // moisture glows underneath
-    ctx.globalCompositeOperation = "multiply";
+    ctx.globalCompositeOperation = "screen";
     for (var i = 0; i < glows.length; i++) drawGlow(glows[i], time);
     ctx.globalCompositeOperation = "source-over";
 
