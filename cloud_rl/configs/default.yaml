@@ -3,7 +3,7 @@ out_dir: ./runs/cloud_rl
 image_height: 256
 image_width: 256
 batch_size: 16
-num_workers: 2
+num_workers: 0
 seed: 42
 
 policy:
