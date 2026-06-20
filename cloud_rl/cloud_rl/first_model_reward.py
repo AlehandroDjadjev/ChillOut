@@ -191,6 +191,8 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self,
         checkpoint_path: str | Path,
         reward_scale_c: float = 5.0,
+        improvement_gain: float = 100.0,
+        absolute_error_weight: float = 0.0,
         optional_budget_penalty: float = 0.0,
         prefer_best: bool = True,
     ) -> None:
@@ -200,6 +202,8 @@ class CloudTempCheckpointReward(AbstractRewardModel):
 
         self.checkpoint_path = str(resolved)
         self.reward_scale_c = float(reward_scale_c)
+        self.improvement_gain = float(improvement_gain)
+        self.absolute_error_weight = float(absolute_error_weight)
         self.optional_budget_penalty = float(optional_budget_penalty)
         self.raw_feature_names = list(ckpt["raw_feature_names"])
         self.model_feature_names = list(ckpt["model_feature_names"])
@@ -290,7 +294,10 @@ class CloudTempCheckpointReward(AbstractRewardModel):
 
         original_temp_error = (original_predicted_temperature - target_temperature.float()).abs()
         temp_error = (predicted_temperature - target_temperature.float()).abs()
-        reward = -temp_error + torch.exp(-temp_error / max(1e-6, self.reward_scale_c))
+        temp_improvement = original_temp_error - temp_error
+        reward = self.improvement_gain * temp_improvement
+        if self.absolute_error_weight:
+            reward = reward - self.absolute_error_weight * temp_error
 
         if self.optional_budget_penalty > 0:
             change_cost = (generated_mask - original_mask).abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
@@ -302,4 +309,5 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             "original_temp_error_c": original_temp_error.detach(),
             "predicted_temperature_c": predicted_temperature.detach(),
             "temp_error_c": temp_error.detach(),
+            "temp_improvement_c": temp_improvement.detach(),
         }

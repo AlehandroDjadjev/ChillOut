@@ -19,7 +19,7 @@ class PropertyRanges:
     optical_thickness: Tuple[float, float] = (0.0, 100.0)
     cloud_top_height_m: Tuple[float, float] = (0.0, 12000.0)
     mass_proxy: Tuple[float, float] = (0.0, 1.0)
-    radius_px: Tuple[float, float] = (2.0, 22.0)
+    radius_px: Tuple[float, float] = (6.0, 96.0)
 
 
 def _scale01(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:

@@ -17,12 +17,13 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from cloud_rl.actions import rasterize_actions
+from cloud_rl.actions import CREATE, NOOP, REMOVE, rasterize_actions
 from cloud_rl.dataset import CloudFolderDataset, collate_cloud_batch, compute_stats
 from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first_model_checkpoint
 from cloud_rl.models import CloudActorCritic
 from cloud_rl.ppo import RolloutBatch, ppo_update
 from cloud_rl.rewards import DummyMaxReward
+from cloud_rl.targeting import augment_target_temperature
 from cloud_rl.utils import load_config, resolve_existing_path, save_json, seed_everything, to_device
 
 
@@ -30,6 +31,29 @@ def infinite_loader(loader):
     while True:
         for batch in loader:
             yield batch
+
+
+def random_actions(batch_size: int, max_actions: int, device: torch.device) -> Dict[str, torch.Tensor]:
+    op_choice = torch.randint(0, 3, (batch_size, max_actions), device=device)
+    op = torch.where(op_choice == 2, torch.full_like(op_choice, CREATE), op_choice)
+    return {
+        "op": op,
+        "params": torch.rand(batch_size, max_actions, 8, device=device) * 2.0 - 1.0,
+    }
+
+
+def forced_actions(batch_size: int, max_actions: int, op_id: int, device: torch.device) -> Dict[str, torch.Tensor]:
+    op = torch.full((batch_size, max_actions), op_id, dtype=torch.long, device=device)
+    params = torch.rand(batch_size, max_actions, 8, device=device) * 2.0 - 1.0
+    params[..., 2] = 1.0
+    return {"op": op, "params": params}
+
+
+def noop_actions(batch_size: int, max_actions: int, device: torch.device) -> Dict[str, torch.Tensor]:
+    return {
+        "op": torch.full((batch_size, max_actions), NOOP, dtype=torch.long, device=device),
+        "params": torch.zeros(batch_size, max_actions, 8, device=device),
+    }
 
 
 def resolve_rl_resume_checkpoint(source: str, out_dir: Path) -> Path | None:
@@ -70,7 +94,73 @@ def load_history_tail(out_dir: Path) -> List[Dict]:
     return list(payload.get("history", []))
 
 
-def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.device) -> tuple[RolloutBatch, Dict[str, float]]:
+def select_guided_actions(
+    model,
+    reward_fn,
+    batch: Dict[str, torch.Tensor],
+    policy_sample: Dict[str, torch.Tensor],
+    max_actions: int,
+    random_candidates: int,
+    device: torch.device,
+) -> tuple[Dict[str, torch.Tensor], torch.Tensor, Dict[str, torch.Tensor]]:
+    b = batch["original_mask"].shape[0]
+    candidates = [
+        {"op": policy_sample["op"], "params": policy_sample["params"]},
+        noop_actions(b, max_actions, device),
+        forced_actions(b, max_actions, CREATE, device),
+        forced_actions(b, max_actions, REMOVE, device),
+    ]
+    candidates.extend(random_actions(b, max_actions, device) for _ in range(max(0, random_candidates)))
+
+    rewards = []
+    info_by_key: Dict[str, List[torch.Tensor]] = {}
+    for candidate in candidates:
+        rast = rasterize_actions(batch["original_mask"], candidate["op"], candidate["params"])
+        reward, info = reward_fn(
+            batch["original_mask"],
+            rast["generated_mask"],
+            batch["raw_features"],
+            batch["target_temp"],
+            rast["property_maps"],
+        )
+        rewards.append(reward)
+        for key, value in info.items():
+            info_by_key.setdefault(key, []).append(value)
+
+    reward_stack = torch.stack(rewards, dim=0)
+    best_idx = reward_stack.squeeze(-1).argmax(dim=0)
+    row_idx = torch.arange(b, device=device)
+    op_stack = torch.stack([candidate["op"] for candidate in candidates], dim=0)
+    param_stack = torch.stack([candidate["params"] for candidate in candidates], dim=0)
+    selected = {
+        "op": op_stack[best_idx, row_idx],
+        "params": param_stack[best_idx, row_idx],
+    }
+    selected_reward = reward_stack[best_idx, row_idx]
+    selected_info = {
+        key: torch.stack(values, dim=0)[best_idx, row_idx]
+        for key, values in info_by_key.items()
+    }
+    log_prob, entropy, value = model.evaluate_actions(
+        batch["obs_map"],
+        batch["features"],
+        batch["target_temp_norm"],
+        selected["op"],
+        selected["params"],
+    )
+    selected.update({"log_prob": log_prob, "entropy": entropy, "value": value})
+    return selected, selected_reward, selected_info
+
+
+def collect_rollout(
+    model,
+    reward_fn,
+    loader_iter,
+    steps: int,
+    device: torch.device,
+    cfg: Dict,
+    target_std: float,
+) -> tuple[RolloutBatch, Dict[str, float]]:
     chunks: Dict[str, List[torch.Tensor]] = {
         "obs_map": [], "features": [], "target_temp_norm": [], "original_mask": [],
         "raw_features": [], "target_temp": [], "op": [], "params": [],
@@ -81,23 +171,37 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
         "generated_temp_err": [],
         "original_temp_err": [],
         "temp_improvement": [],
+        "target_temp": [],
     }
     model.eval()
     with torch.inference_mode():
         for _ in range(steps):
             batch = to_device(next(loader_iter), device, non_blocking=(device.type == "cuda"))
+            batch = augment_target_temperature(batch, cfg, target_std=target_std, device=device)
             if device.type == "cuda":
                 batch["obs_map"] = batch["obs_map"].contiguous(memory_format=torch.channels_last)
                 batch["original_mask"] = batch["original_mask"].contiguous(memory_format=torch.channels_last)
             sampled = model.sample(batch["obs_map"], batch["features"], batch["target_temp_norm"])
-            rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
-            reward, reward_info = reward_fn(
-                batch["original_mask"],
-                rast["generated_mask"],
-                batch["raw_features"],
-                batch["target_temp"],
-                rast["property_maps"],
-            )
+            guided_candidates = int((cfg.get("policy") or {}).get("guided_random_candidates", 0))
+            if guided_candidates > 0:
+                sampled, reward, reward_info = select_guided_actions(
+                    model,
+                    reward_fn,
+                    batch,
+                    sampled,
+                    max_actions=int((cfg.get("policy") or {}).get("max_actions", 3)),
+                    random_candidates=guided_candidates,
+                    device=device,
+                )
+            else:
+                rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
+                reward, reward_info = reward_fn(
+                    batch["original_mask"],
+                    rast["generated_mask"],
+                    batch["raw_features"],
+                    batch["target_temp"],
+                    rast["property_maps"],
+                )
             returns = reward.view(-1, 1)
             advantages = returns - sampled["value"]
             if "temp_error_c" in reward_info:
@@ -109,6 +213,7 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
                         (reward_info["original_temp_error_c"] - reward_info["temp_error_c"]).detach().cpu()
                     )
             debug_chunks["reward"].append(reward.detach().cpu())
+            debug_chunks["target_temp"].append(batch["target_temp"].detach().cpu())
 
             for k in ["obs_map", "features", "target_temp_norm", "original_mask", "raw_features", "target_temp"]:
                 chunks[k].append(batch[k].detach().cpu())
@@ -141,6 +246,8 @@ def main() -> None:
     )
     parser.add_argument("--reward-run-dir", default="runs/cloud_temp", help="Directory used when reward-checkpoint=auto.")
     parser.add_argument("--reward-scale", type=float, default=5.0, help="Temperature error scale for the first-model reward.")
+    parser.add_argument("--reward-improvement-gain", type=float, default=100.0)
+    parser.add_argument("--reward-absolute-error-weight", type=float, default=0.0)
     parser.add_argument("--reward-budget-penalty", type=float, default=0.0)
     parser.add_argument("--dummy-budget-penalty", type=float, default=0.0, help="Penalty used only with the dummy reward.")
     args = parser.parse_args()
@@ -214,6 +321,8 @@ def main() -> None:
         reward_fn = CloudTempCheckpointReward(
             reward_ckpt,
             reward_scale_c=args.reward_scale,
+            improvement_gain=args.reward_improvement_gain,
+            absolute_error_weight=args.reward_absolute_error_weight,
             optional_budget_penalty=args.reward_budget_penalty,
         ).to(device)
         if device.type == "cuda":
@@ -244,7 +353,13 @@ def main() -> None:
     pbar = tqdm(range(start_update, total_updates + 1), desc="PPO updates")
     for update in pbar:
         rollout, rollout_debug = collect_rollout(
-            model, reward_fn, loader_iter, steps=int(train_cfg["steps_per_update"]), device=device
+            model,
+            reward_fn,
+            loader_iter,
+            steps=int(train_cfg["steps_per_update"]),
+            device=device,
+            cfg=cfg,
+            target_std=float(dataset.target_std),
         )
         model.train()
         logs = {}
@@ -256,6 +371,7 @@ def main() -> None:
                 clip_eps=float(pcfg["clip_eps"]),
                 value_coef=float(pcfg["value_coef"]),
                 entropy_coef=float(pcfg["entropy_coef"]),
+                bc_coef=float(pcfg.get("bc_coef", 0.0)),
                 grad_clip=float(pcfg["grad_clip"]),
             )
         logs["update"] = update

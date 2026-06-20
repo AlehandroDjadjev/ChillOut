@@ -10,11 +10,13 @@ policy:
   max_actions: 3
   hidden_dim: 256
   lr: 0.0003
-  entropy_coef: 0.003
+  entropy_coef: 0.0
+  bc_coef: 0.05
   value_coef: 0.5
   clip_eps: 0.2
-  ppo_epochs: 2
+  ppo_epochs: 4
   grad_clip: 0.5
+  guided_random_candidates: 4
 
 training:
   updates: 8
@@ -25,3 +27,8 @@ training:
 normalization:
   target_temp_mean: 20.0
   target_temp_std: 10.0
+
+target_augmentation:
+  enabled: true
+  min_abs_offset_c: 1.0
+  max_abs_offset_c: 5.0

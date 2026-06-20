@@ -14,6 +14,7 @@ from cloud_rl.actions import CREATE, MODIFY, NOOP, REMOVE, rasterize_actions
 from cloud_rl.dataset import CloudFolderDataset, collate_cloud_batch
 from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first_model_checkpoint
 from cloud_rl.models import CloudActorCritic
+from cloud_rl.targeting import augment_target_temperature
 from cloud_rl.utils import load_config, resolve_existing_path, save_json, to_device
 
 
@@ -83,6 +84,9 @@ def main() -> None:
     parser.add_argument("--num-batches", type=int, default=12)
     parser.add_argument("--out-dir", default="./rl_diagnostics")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--reward-improvement-gain", type=float, default=100.0)
+    parser.add_argument("--reward-absolute-error-weight", type=float, default=0.0)
+    parser.add_argument("--stochastic-policy", action="store_true")
     args = parser.parse_args()
 
     cfg = load_config(resolve_existing_path(args.config))
@@ -97,7 +101,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     reward_ckpt = resolve_first_model_checkpoint(resolve_existing_path(args.reward_checkpoint), prefer_best=False)
-    reward_fn = CloudTempCheckpointReward(reward_ckpt).to(device)
+    reward_fn = CloudTempCheckpointReward(
+        reward_ckpt,
+        improvement_gain=args.reward_improvement_gain,
+        absolute_error_weight=args.reward_absolute_error_weight,
+    ).to(device)
 
     policy_model: Optional[CloudActorCritic] = None
     if args.policy_checkpoint:
@@ -140,6 +148,7 @@ def main() -> None:
                 break
 
             batch = to_device(batch, device, non_blocking=(device.type == "cuda"))
+            batch = augment_target_temperature(batch, cfg, target_std=float(dataset.target_std), device=device)
 
             noop_actions = _empty_actions(batch["original_mask"].shape[0], int(cfg["policy"]["max_actions"]), device)
             random_actions = _sample_random_actions(batch["original_mask"].shape[0], int(cfg["policy"]["max_actions"]), device)
@@ -188,7 +197,10 @@ def main() -> None:
             non_noop = float("nan")
 
             if policy_model is not None:
-                sampled = policy_model.sample(batch["obs_map"], batch["features"], batch["target_temp_norm"])
+                if args.stochastic_policy:
+                    sampled = policy_model.sample(batch["obs_map"], batch["features"], batch["target_temp_norm"])
+                else:
+                    sampled = policy_model.deterministic(batch["obs_map"], batch["features"], batch["target_temp_norm"])
                 policy_rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
                 policy_reward, policy_info = reward_fn(
                     batch["original_mask"],
