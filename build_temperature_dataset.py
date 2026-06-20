@@ -31,6 +31,7 @@ import datetime as dt
 import json
 import math
 import os
+import shutil
 import sys
 import time
 import zlib
@@ -41,6 +42,11 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
+
+try:
+    from tqdm import tqdm
+except Exception:  # pragma: no cover - optional dependency fallback
+    tqdm = None
 
 
 DEFAULT_SERVER_URL = "http://localhost:5173"
@@ -122,6 +128,63 @@ ANGLE_FEATURE_NAMES = {"wind_direction_10m_dominant"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
+class SimpleProgressBar:
+    def __init__(self, total: int, desc: str, unit: str = "img") -> None:
+        self.total = max(1, int(total))
+        self.desc = desc
+        self.unit = unit
+        self.count = 0
+        self.start = time.monotonic()
+        self.postfix = ""
+        self._render()
+
+    def update(self, step: int = 1) -> None:
+        self.count = min(self.total, self.count + step)
+        self._render()
+
+    def set_postfix_str(self, text: str) -> None:
+        self.postfix = text
+        self._render()
+
+    def close(self) -> None:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    def _render(self) -> None:
+        elapsed = max(0.001, time.monotonic() - self.start)
+        rate = self.count / elapsed
+        remaining = max(0, self.total - self.count)
+        eta = remaining / rate if rate > 1e-9 else 0.0
+        width = 28
+        filled = int(width * self.count / self.total)
+        bar = "█" * filled + "░" * (width - filled)
+        pct = 100.0 * self.count / self.total
+        line = (
+            f"\r{self.desc} [{bar}] {self.count}/{self.total} {self.unit} "
+            f"({pct:5.1f}%) {rate:5.2f} {self.unit}/s "
+            f"elapsed {format_duration(elapsed)} eta {format_duration(eta)}"
+        )
+        if self.postfix:
+            line += f" | {self.postfix}"
+        sys.stdout.write(line[: max(0, shutil.get_terminal_size((160, 20)).columns - 1)])
+        sys.stdout.flush()
+
+
+def format_duration(seconds: float) -> str:
+    total = max(0, int(round(seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def make_progress_bar(total: int, desc: str, unit: str = "img"):
+    if tqdm is not None:
+        return tqdm(total=total, desc=desc, unit=unit, dynamic_ncols=True, leave=True)
+    return SimpleProgressBar(total=total, desc=desc, unit=unit)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build a PyTorch-ready temperature dataset.")
     parser.add_argument("--server-url", default=DEFAULT_SERVER_URL, help="Local proxy URL.")
@@ -199,7 +262,8 @@ def main() -> int:
     if TARGET_FIELD in raw_feature_names:
         raise SystemExit(f"Configuration error: target field {TARGET_FIELD!r} is also listed as an input feature.")
 
-    for city in selected_cities:
+    overall_start = time.monotonic()
+    for city_index, city in enumerate(selected_cities, start=1):
       # Keep the city loop outermost so weather and satellite stats can be reused per city.
         bbox = bbox_from_center(city.lat, city.lon, args.radius_km)
         weather_by_date = fetch_open_meteo_daily(city, date_range[0], date_range[-1])
@@ -210,40 +274,58 @@ def main() -> int:
         city_dir = masks_dir / city_slug
         city_dir.mkdir(exist_ok=True)
 
-        for sample in merged:
-            mask_path = city_dir / f"{sample['date']}.png"
-            if not download_satellite_mask(
-                server_url,
-                bbox,
-                sample["date"],
-                mask_path,
-                args.image_width,
-                args.image_height,
-            ):
-                continue
+        city_start = time.monotonic()
+        progress = make_progress_bar(
+            total=len(merged),
+            desc=f"Downloading masks ({city.name} {city_index}/{len(selected_cities)})",
+            unit="day",
+        )
+        try:
+            for day_index, sample in enumerate(merged):
+                mask_path = city_dir / f"{sample['date']}.png"
+                success = download_satellite_mask(
+                    server_url,
+                    bbox,
+                    sample["date"],
+                    mask_path,
+                    args.image_width,
+                    args.image_height,
+                )
 
-            record = {
-                "sample_id": f"{city_slug}_{sample['date']}",
-                "city": city.name,
-                "country": city.country,
-                "lat": city.lat,
-                "lon": city.lon,
-                "bbox": bbox,
-                "date": sample["date"],
-                "anchor": f"{sample['date']}T00:00:00Z",
-                "mask_path": str(mask_path.relative_to(out_dir)).replace("\\", "/"),
-                "target_temperature_c": sample["target"],
-                "inputs": sample["inputs"],
-                "feature_vector": [float(sample["inputs"][name]) for name in raw_feature_names],
-                "source_notes": {
-                    "mask": "Sentinel-2 cloud mask",
-                    "satellite_stats": "Sentinel-5P + Sentinel-3 OLCI + Sentinel-3 SLSTR daily statistics",
-                    "weather": "Open-Meteo daily and hourly-aggregated weather (ERA5-based)",
-                    "radiation_note": "Shortwave, direct, diffuse, direct-normal, and terrestrial radiation are summed from hourly values where needed.",
-                    "cloud_type_note": "Sentinel-3 SLSTR cloud screening/flagging/cirrus/clearing bands are cloud-type proxies.",
-                },
-            }
-            manifest.append(record)
+                if success:
+                    record = {
+                        "sample_id": f"{city_slug}_{sample['date']}",
+                        "city": city.name,
+                        "country": city.country,
+                        "lat": city.lat,
+                        "lon": city.lon,
+                        "bbox": bbox,
+                        "date": sample["date"],
+                        "anchor": f"{sample['date']}T00:00:00Z",
+                        "mask_path": str(mask_path.relative_to(out_dir)).replace("\\", "/"),
+                        "target_temperature_c": sample["target"],
+                        "inputs": sample["inputs"],
+                        "feature_vector": [float(sample["inputs"][name]) for name in raw_feature_names],
+                        "source_notes": {
+                            "mask": "Sentinel-2 cloud mask",
+                            "satellite_stats": "Sentinel-5P + Sentinel-3 OLCI + Sentinel-3 SLSTR daily statistics",
+                            "weather": "Open-Meteo daily and hourly-aggregated weather (ERA5-based)",
+                            "radiation_note": "Shortwave, direct, diffuse, direct-normal, and terrestrial radiation are summed from hourly values where needed.",
+                            "cloud_type_note": "Sentinel-3 SLSTR cloud screening/flagging/cirrus/clearing bands are cloud-type proxies.",
+                        },
+                    }
+                    manifest.append(record)
+
+                days_left = max(0, len(merged) - day_index - 1)
+                elapsed = time.monotonic() - city_start
+                speed = (day_index + 1) / max(elapsed, 1e-6)
+                progress.set_postfix_str(
+                    f"rows={len(manifest)} speed={speed:.2f} img/s elapsed={format_duration(time.monotonic() - overall_start)} "
+                    f"city_left={days_left}day{'s' if days_left != 1 else ''}"
+                )
+                progress.update(1)
+        finally:
+            progress.close()
 
     if not manifest:
         raise SystemExit("No samples were produced. Check network access and the configured dates.")
