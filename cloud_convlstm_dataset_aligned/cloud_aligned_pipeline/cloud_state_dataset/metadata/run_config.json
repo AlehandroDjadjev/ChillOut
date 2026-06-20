@@ -1,0 +1,191 @@
+{
+  "end_date": "2026-01-01T00:00:00+00:00",
+  "era5_pressure_variables": [],
+  "era5_single_accum_variables": [
+    "surface_solar_radiation_downwards",
+    "surface_solar_radiation_downward_clear_sky",
+    "surface_thermal_radiation_downwards",
+    "surface_thermal_radiation_downward_clear_sky",
+    "surface_net_solar_radiation",
+    "surface_net_solar_radiation_clear_sky",
+    "surface_net_thermal_radiation",
+    "surface_net_thermal_radiation_clear_sky",
+    "toa_incident_solar_radiation",
+    "top_net_solar_radiation",
+    "top_net_thermal_radiation",
+    "total_precipitation"
+  ],
+  "era5_single_instant_variables": [
+    "total_cloud_cover",
+    "low_cloud_cover",
+    "medium_cloud_cover",
+    "high_cloud_cover",
+    "total_column_cloud_liquid_water",
+    "total_column_cloud_ice_water",
+    "2m_temperature",
+    "2m_dewpoint_temperature",
+    "total_column_water_vapour",
+    "surface_pressure",
+    "mean_sea_level_pressure",
+    "boundary_layer_height",
+    "convective_available_potential_energy",
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "skin_temperature",
+    "sea_surface_temperature",
+    "snow_depth",
+    "soil_temperature_level_1",
+    "volumetric_soil_water_layer_1",
+    "forecast_albedo",
+    "land_sea_mask",
+    "geopotential"
+  ],
+  "era5_single_variables": [
+    "total_cloud_cover",
+    "low_cloud_cover",
+    "medium_cloud_cover",
+    "high_cloud_cover",
+    "total_column_cloud_liquid_water",
+    "total_column_cloud_ice_water",
+    "2m_temperature",
+    "2m_dewpoint_temperature",
+    "total_column_water_vapour",
+    "surface_pressure",
+    "mean_sea_level_pressure",
+    "boundary_layer_height",
+    "convective_available_potential_energy",
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind",
+    "skin_temperature",
+    "sea_surface_temperature",
+    "snow_depth",
+    "soil_temperature_level_1",
+    "volumetric_soil_water_layer_1",
+    "forecast_albedo",
+    "land_sea_mask",
+    "geopotential",
+    "surface_solar_radiation_downwards",
+    "surface_solar_radiation_downward_clear_sky",
+    "surface_thermal_radiation_downwards",
+    "surface_thermal_radiation_downward_clear_sky",
+    "surface_net_solar_radiation",
+    "surface_net_solar_radiation_clear_sky",
+    "surface_net_thermal_radiation",
+    "surface_net_thermal_radiation_clear_sky",
+    "toa_incident_solar_radiation",
+    "top_net_solar_radiation",
+    "top_net_thermal_radiation",
+    "total_precipitation"
+  ],
+  "image_size": [
+    100,
+    100
+  ],
+  "locations": [
+    {
+      "lat": 42.6977,
+      "lon": 23.3219,
+      "name": "sofia_bg"
+    },
+    {
+      "lat": 37.9838,
+      "lon": 23.7275,
+      "name": "athens_gr"
+    },
+    {
+      "lat": 51.5074,
+      "lon": -0.1278,
+      "name": "london_uk"
+    },
+    {
+      "lat": 59.9139,
+      "lon": 10.7522,
+      "name": "oslo_no"
+    },
+    {
+      "lat": 30.0444,
+      "lon": 31.2357,
+      "name": "cairo_eg"
+    },
+    {
+      "lat": 64.1466,
+      "lon": -21.9426,
+      "name": "reykjavik_is"
+    },
+    {
+      "lat": 38.7223,
+      "lon": -9.1393,
+      "name": "lisbon_pt"
+    },
+    {
+      "lat": 45.4642,
+      "lon": 9.19,
+      "name": "milan_it"
+    },
+    {
+      "lat": 33.5731,
+      "lon": -7.5898,
+      "name": "casablanca_ma"
+    },
+    {
+      "lat": 60.1699,
+      "lon": 24.9384,
+      "name": "helsinki_fi"
+    }
+  ],
+  "max_cloud": 100.0,
+  "openmeteo_hourly_variables": [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "dew_point_2m",
+    "precipitation",
+    "rain",
+    "snowfall",
+    "snow_depth",
+    "pressure_msl",
+    "surface_pressure",
+    "cloud_cover",
+    "cloud_cover_low",
+    "cloud_cover_mid",
+    "cloud_cover_high",
+    "shortwave_radiation",
+    "direct_radiation",
+    "diffuse_radiation",
+    "direct_normal_irradiance",
+    "terrestrial_radiation",
+    "shortwave_radiation_instant",
+    "direct_radiation_instant",
+    "diffuse_radiation_instant",
+    "direct_normal_irradiance_instant",
+    "terrestrial_radiation_instant",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "wind_gusts_10m",
+    "soil_temperature_0_to_7cm",
+    "soil_moisture_0_to_7cm",
+    "vapour_pressure_deficit",
+    "et0_fao_evapotranspiration",
+    "sunshine_duration",
+    "weather_code"
+  ],
+  "openmeteo_model": "best_match",
+  "patch_km": 10.0,
+  "pressure_levels": [],
+  "resolution_m": 100.0,
+  "sentinel_cloud_tensor_bands": [
+    "cloud_mask_scl",
+    "cloud_gray",
+    "cloud_red_B04",
+    "cloud_green_B03",
+    "cloud_blue_B02",
+    "cloud_nir_B08",
+    "cloud_prob_CLP",
+    "aerosol_AOT",
+    "water_vapour_WVP_placeholder_zero",
+    "cirrus_flag",
+    "high_cloud_flag",
+    "medium_cloud_flag"
+  ],
+  "start_date": "2017-01-01T00:00:00+00:00",
+  "weather_source": "open-meteo-historical"
+}

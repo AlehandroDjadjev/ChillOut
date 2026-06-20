@@ -1,0 +1,78 @@
+seed: 1337
+
+# This config is meant for tensors produced by:
+#   python src/build_training_tensors_from_downloader.py --profile builder24 ...
+#
+# It uses indexed windows so multiple locations can be concatenated safely.
+data:
+  x_series: data/processed_aligned/x_series.npy
+  y_series: data/processed_aligned/y_series.npy
+  train_index: data/processed_aligned/train_windows.csv
+  val_index: data/processed_aligned/val_windows.csv
+  test_index: data/processed_aligned/test_windows.csv
+
+window:
+  input_len: 8          # 8 snapshots ~= 40 days at 5-day cadence
+  horizon: 1            # next 5-day response
+  target_mode: mean
+
+model:
+  input_channels: 24
+  output_channels: 4
+  encoder_channels: 32
+  hidden_channels: 24
+  kernel_size: 3
+  dropout: 0.08
+
+training:
+  batch_size: 4
+  epochs: 60
+  learning_rate: 0.001
+  weight_decay: 0.0002
+  grad_clip: 1.0
+  num_workers: 2
+  device: auto
+  amp: true
+  accumulation_steps: 1
+  patience: 10
+  checkpoint_path: checkpoints/best_builder24.pt
+  last_checkpoint_path: checkpoints/last_builder24.pt
+
+loss:
+  type: smooth_l1
+  channel_weights: [1.0, 1.0, 1.0, 0.8]
+
+channels:
+  input:
+    - s2_cloud_mask_scl
+    - s2_cloud_gray
+    - s2_cloud_prob_CLP
+    - s2_cirrus_flag
+    - era5_total_cloud_cover
+    - era5_low_cloud_cover
+    - era5_medium_cloud_cover
+    - era5_high_cloud_cover
+    - era5_total_column_cloud_liquid_water
+    - era5_total_column_cloud_ice_water
+    - s2_aerosol_AOT
+    - s2_water_vapour_WVP
+    - era5_surface_solar_radiation_downwards
+    - era5_surface_solar_radiation_downwards_clear_sky
+    - era5_surface_thermal_radiation_downwards
+    - era5_surface_thermal_radiation_downwards_clear_sky
+    - era5_surface_net_solar_radiation
+    - era5_surface_net_thermal_radiation
+    - era5_2m_temperature_anomaly
+    - era5_2m_dewpoint_temperature
+    - era5_total_column_water_vapour
+    - era5_surface_pressure
+    - era5_total_precipitation
+    - era5_wind_speed_10m
+  target:
+    - shortwave_anomaly_next_5day
+    - longwave_anomaly_next_5day
+    - net_radiation_anomaly_next_5day
+    - temperature_anomaly_next_5day
+
+ablation:
+  cloud_channel_indices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
