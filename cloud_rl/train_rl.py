@@ -70,11 +70,17 @@ def load_history_tail(out_dir: Path) -> List[Dict]:
     return list(payload.get("history", []))
 
 
-def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.device) -> RolloutBatch:
+def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.device) -> tuple[RolloutBatch, Dict[str, float]]:
     chunks: Dict[str, List[torch.Tensor]] = {
         "obs_map": [], "features": [], "target_temp_norm": [], "original_mask": [],
         "raw_features": [], "target_temp": [], "op": [], "params": [],
         "old_log_prob": [], "returns": [], "advantages": [],
+    }
+    debug_chunks: Dict[str, List[torch.Tensor]] = {
+        "reward": [],
+        "generated_temp_err": [],
+        "original_temp_err": [],
+        "temp_improvement": [],
     }
     model.eval()
     with torch.inference_mode():
@@ -85,7 +91,7 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
                 batch["original_mask"] = batch["original_mask"].contiguous(memory_format=torch.channels_last)
             sampled = model.sample(batch["obs_map"], batch["features"], batch["target_temp_norm"])
             rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
-            reward, _ = reward_fn(
+            reward, reward_info = reward_fn(
                 batch["original_mask"],
                 rast["generated_mask"],
                 batch["raw_features"],
@@ -94,6 +100,15 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
             )
             returns = reward.view(-1, 1)
             advantages = returns - sampled["value"]
+            if "temp_error_c" in reward_info:
+                debug_chunks["generated_temp_err"].append(reward_info["temp_error_c"].detach().cpu())
+            if "original_temp_error_c" in reward_info:
+                debug_chunks["original_temp_err"].append(reward_info["original_temp_error_c"].detach().cpu())
+                if "temp_error_c" in reward_info:
+                    debug_chunks["temp_improvement"].append(
+                        (reward_info["original_temp_error_c"] - reward_info["temp_error_c"]).detach().cpu()
+                    )
+            debug_chunks["reward"].append(reward.detach().cpu())
 
             for k in ["obs_map", "features", "target_temp_norm", "original_mask", "raw_features", "target_temp"]:
                 chunks[k].append(batch[k].detach().cpu())
@@ -104,7 +119,11 @@ def collect_rollout(model, reward_fn, loader_iter, steps: int, device: torch.dev
             chunks["advantages"].append(advantages.detach().cpu())
 
     cat = {k: torch.cat(v, dim=0).to(device) for k, v in chunks.items()}
-    return RolloutBatch(**cat)
+    debug = {}
+    for key, values in debug_chunks.items():
+        if values:
+            debug[key] = float(torch.cat(values, dim=0).mean().item())
+    return RolloutBatch(**cat), debug
 
 
 def main() -> None:
@@ -224,7 +243,7 @@ def main() -> None:
 
     pbar = tqdm(range(start_update, total_updates + 1), desc="PPO updates")
     for update in pbar:
-        rollout = collect_rollout(
+        rollout, rollout_debug = collect_rollout(
             model, reward_fn, loader_iter, steps=int(train_cfg["steps_per_update"]), device=device
         )
         model.train()
@@ -240,6 +259,7 @@ def main() -> None:
                 grad_clip=float(pcfg["grad_clip"]),
             )
         logs["update"] = update
+        logs.update(rollout_debug)
         history.append(logs)
         pbar.set_postfix({k: round(v, 4) for k, v in logs.items() if isinstance(v, float)})
 

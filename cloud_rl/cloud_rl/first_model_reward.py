@@ -269,20 +269,28 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         target_temperature: torch.Tensor,
         property_maps: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        mask = self._prepare_mask(generated_mask)
-        if mask.ndim == 4 and mask.is_cuda:
-            mask = mask.contiguous(memory_format=torch.channels_last)
+        original = self._prepare_mask(original_mask)
+        generated = self._prepare_mask(generated_mask)
+        if original.ndim == 4 and original.is_cuda:
+            original = original.contiguous(memory_format=torch.channels_last)
+        if generated.ndim == 4 and generated.is_cuda:
+            generated = generated.contiguous(memory_format=torch.channels_last)
         features = self._prepare_features(feature_vector)
 
         with torch.inference_mode():
-            if mask.is_cuda:
+            if generated.is_cuda:
+                stacked_masks = torch.cat([original, generated], dim=0)
+                stacked_features = torch.cat([features, features], dim=0)
                 with torch.autocast(device_type="cuda", enabled=True):
-                    predicted_temperature = self.model(mask, features)
+                    stacked_pred = self.model(stacked_masks, stacked_features)
             else:
-                predicted_temperature = self.model(mask, features)
+                stacked_pred = self.model(torch.cat([original, generated], dim=0), torch.cat([features, features], dim=0))
 
+        original_predicted_temperature, predicted_temperature = stacked_pred.chunk(2, dim=0)
+
+        original_temp_error = (original_predicted_temperature - target_temperature.float()).abs()
         temp_error = (predicted_temperature - target_temperature.float()).abs()
-        reward = torch.exp(-temp_error / max(1e-6, self.reward_scale_c))
+        reward = -temp_error + torch.exp(-temp_error / max(1e-6, self.reward_scale_c))
 
         if self.optional_budget_penalty > 0:
             change_cost = (generated_mask - original_mask).abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
@@ -290,6 +298,8 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             reward = reward - self.optional_budget_penalty * (change_cost + prop_cost)
 
         return reward, {
+            "original_predicted_temperature_c": original_predicted_temperature.detach(),
+            "original_temp_error_c": original_temp_error.detach(),
             "predicted_temperature_c": predicted_temperature.detach(),
             "temp_error_c": temp_error.detach(),
         }
