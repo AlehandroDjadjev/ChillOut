@@ -1,0 +1,226 @@
+{
+  "architecture": "ResidualSplitConvLSTM_v4",
+  "target_is_delta": true,
+  "formula": "future_temp = current_temperature_c + inverse_delta(final_delta)",
+  "split": "val",
+  "num_records": 515,
+  "num_windows": 488,
+  "variants": [
+    {
+      "variant": "normal",
+      "mae_c": 2.563542366027832,
+      "rmse_c": 3.2517988681793213,
+      "bias_c": 0.14305341243743896,
+      "corr": 0.889481782913208,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.25612950325012207,
+      "gate_mean": 0.4784895526703264
+    },
+    {
+      "variant": "no_cloud_image",
+      "mae_c": 2.519409656524658,
+      "rmse_c": 3.232710361480713,
+      "bias_c": -0.09987010806798935,
+      "corr": 0.8918479681015015,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.3002622127532959,
+      "gate_mean": 0.4797305636352203
+    },
+    {
+      "variant": "no_cloud_scalars",
+      "mae_c": 2.592467784881592,
+      "rmse_c": 3.295474052429199,
+      "bias_c": 0.2684783339500427,
+      "corr": 0.8900741338729858,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.2272040843963623,
+      "gate_mean": 0.47771782684521596
+    },
+    {
+      "variant": "no_cloud_all",
+      "mae_c": 2.567657232284546,
+      "rmse_c": 3.2841415405273438,
+      "bias_c": 0.05664142966270447,
+      "corr": 0.8919644951820374,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.2520146369934082,
+      "gate_mean": 0.478869512371841
+    },
+    {
+      "variant": "cloud_shuffle",
+      "mae_c": 2.6113855838775635,
+      "rmse_c": 3.345914125442505,
+      "bias_c": 0.1615222990512848,
+      "corr": 0.8835949301719666,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.20828628540039062,
+      "gate_mean": 0.4783293650042815
+    },
+    {
+      "variant": "no_world",
+      "mae_c": 2.754164934158325,
+      "rmse_c": 3.5002963542938232,
+      "bias_c": 0.4136834144592285,
+      "corr": 0.8742080926895142,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.0655069351196289,
+      "gate_mean": 0.4720236461792813
+    },
+    {
+      "variant": "world_shuffle",
+      "mae_c": 2.8820791244506836,
+      "rmse_c": 3.684408187866211,
+      "bias_c": 0.1507415473461151,
+      "corr": 0.8605875372886658,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": -0.06240725517272949,
+      "gate_mean": 0.4783710421475231
+    },
+    {
+      "variant": "no_interaction",
+      "mae_c": 2.6407999992370605,
+      "rmse_c": 3.3269670009613037,
+      "bias_c": 0.7245214581489563,
+      "corr": 0.889362633228302,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.17887187004089355,
+      "gate_mean": 0.4784895526703264
+    },
+    {
+      "variant": "no_image_delta",
+      "mae_c": 2.5603690147399902,
+      "rmse_c": 3.2525415420532227,
+      "bias_c": 0.22435985505580902,
+      "corr": 0.8906981945037842,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.25930285453796387,
+      "gate_mean": 0.4784895526703264
+    },
+    {
+      "variant": "no_cloud_delta",
+      "mae_c": 2.5822370052337646,
+      "rmse_c": 3.290020227432251,
+      "bias_c": 0.2022867351770401,
+      "corr": 0.8901812434196472,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.23743486404418945,
+      "gate_mean": 0.4784895526703264
+    },
+    {
+      "variant": "no_world_delta",
+      "mae_c": 2.5849289894104004,
+      "rmse_c": 3.292156934738159,
+      "bias_c": 0.24266573786735535,
+      "corr": 0.8865776062011719,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.2347428798675537,
+      "gate_mean": 0.4784895526703264
+    },
+    {
+      "variant": "all_zero",
+      "mae_c": 2.7303266525268555,
+      "rmse_c": 3.5011606216430664,
+      "bias_c": 0.2305087447166443,
+      "corr": 0.8773407936096191,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.08934521675109863,
+      "gate_mean": 0.4728419780731201
+    }
+  ],
+  "components": [
+    {
+      "component": "image_delta_as_forecast",
+      "mae_c": 2.8305978775024414,
+      "rmse_c": 3.5934019088745117,
+      "bias_c": 0.8898937106132507,
+      "corr": 0.8760880827903748,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": -0.010926008224487305
+    },
+    {
+      "component": "cloud_delta_as_forecast",
+      "mae_c": 2.8181962966918945,
+      "rmse_c": 3.584232807159424,
+      "bias_c": 0.9095455408096313,
+      "corr": 0.8747429847717285,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.0014755725860595703
+    },
+    {
+      "component": "world_delta_as_forecast",
+      "mae_c": 2.6829724311828613,
+      "rmse_c": 3.3964297771453857,
+      "bias_c": 0.8673852682113647,
+      "corr": 0.8914949297904968,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.13669943809509277
+    },
+    {
+      "component": "interaction_delta_as_forecast",
+      "mae_c": 2.6060240268707275,
+      "rmse_c": 3.336583375930786,
+      "bias_c": 0.3832615911960602,
+      "corr": 0.8887628316879272,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.21364784240722656
+    },
+    {
+      "component": "final",
+      "mae_c": 2.563542366027832,
+      "rmse_c": 3.2517988681793213,
+      "bias_c": 0.14305341243743896,
+      "corr": 0.889481782913208,
+      "persistence_mae_c": 2.819671869277954,
+      "improvement_vs_persistence_c": 0.25612950325012207
+    }
+  ],
+  "baselines": [
+    {
+      "name": "current_temp_persistence",
+      "mae_c": 2.819671869277954,
+      "rmse_c": 3.5865700244903564,
+      "bias_c": 0.811475396156311,
+      "corr": 0.8773408532142639
+    },
+    {
+      "name": "train_mean",
+      "mae_c": 7.091314315795898,
+      "rmse_c": 8.9962158203125,
+      "bias_c": -5.544092178344727,
+      "corr": 3.916865054520713e-08
+    },
+    {
+      "name": "city_train_mean",
+      "mae_c": 6.8555588722229,
+      "rmse_c": 8.256155967712402,
+      "bias_c": -5.727841854095459,
+      "corr": 0.5760377645492554
+    }
+  ],
+  "cloud_feature_names": [
+    "cloud_s2_fraction",
+    "cloud_s2_prob_mean",
+    "cloud_s2_prob_std",
+    "cloud_s2_prob_p90",
+    "cloud_s2_aot_mean",
+    "cloud_s2_cirrus_fraction",
+    "cloud_s2_high_fraction",
+    "cloud_s2_medium_fraction",
+    "cloud_s2_edge_density",
+    "cloud_s2_texture_std"
+  ],
+  "world_feature_names": [
+    "world_shortwave_radiation",
+    "world_relative_humidity_2m",
+    "world_dew_point_2m",
+    "world_surface_pressure",
+    "world_pressure_msl",
+    "world_wind_speed_10m",
+    "world_wind_u_10m",
+    "world_wind_v_10m",
+    "world_precipitation",
+    "world_snow_depth",
+    "world_vapour_pressure_deficit"
+  ],
+  "input_feature_importance_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\hybrid_convlstm_v4_val\\input_feature_importance.csv"
+}
