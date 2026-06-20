@@ -1,4 +1,4 @@
-data_root: dataset_out
+data_root: dataset_cloudforce_interaction
 out_dir: ./runs/cloud_rl
 image_height: 256
 image_width: 256

@@ -20,12 +20,12 @@ class CloudActorCritic(nn.Module):
     """Hybrid actor-critic policy.
 
     Observation uses both:
-      - obs_map: mask + scalar feature planes + target plane, [B,C,H,W]
-      - features and target again through an MLP, [B,14] and [B,1]
+      - obs_map: mask + cloud/world scalar feature planes + target plane, [B,C,H,W]
+      - features and target again through an MLP, [B,F] and [B,1]
 
     Action uses up to K tokens. Each token has:
       - categorical op: noop/remove/modify/create
-      - continuous params: x, y, radius, mass, humidity, thickness, height, type
+      - continuous params: x, y, radius, cloud_probability, aot, cirrus, layer, texture
     """
 
     def __init__(

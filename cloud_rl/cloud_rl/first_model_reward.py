@@ -63,6 +63,39 @@ def _align_by_names(
     return torch.cat(columns, dim=1)
 
 
+def _weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    weights = weights.clamp_min(0.0)
+    den = weights.flatten(1).sum(dim=1, keepdim=True).clamp_min(1e-6)
+    num = (values * weights).flatten(1).sum(dim=1, keepdim=True)
+    return num / den
+
+
+def _weighted_std(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+    mean = _weighted_mean(values, weights).view(-1, 1, 1, 1)
+    var = _weighted_mean((values - mean).pow(2), weights)
+    return var.clamp_min(0.0).sqrt()
+
+
+def _binary_edge_density(mask: torch.Tensor) -> torch.Tensor:
+    binary = (mask > 0.5).float()
+    dx = (binary[:, :, :, 1:] - binary[:, :, :, :-1]).abs().mean(dim=(1, 2, 3), keepdim=True)
+    dy = (binary[:, :, 1:, :] - binary[:, :, :-1, :]).abs().mean(dim=(1, 2, 3), keepdim=True)
+    return 0.5 * (dx + dy)
+
+
+def _masked_quantile(values: torch.Tensor, weights: torch.Tensor, q: float) -> torch.Tensor:
+    rows: List[torch.Tensor] = []
+    flat_values = values.flatten(1)
+    flat_weights = weights.flatten(1)
+    for row_values, row_weights in zip(flat_values, flat_weights):
+        selected = row_values[row_weights > 0.05]
+        if selected.numel() == 0:
+            rows.append(row_values.new_zeros(1))
+        else:
+            rows.append(torch.quantile(selected.float(), q).view(1).to(dtype=row_values.dtype))
+    return torch.stack(rows, dim=0)
+
+
 class ResBlock(nn.Module):
     def __init__(self, channels: int, dropout: float):
         super().__init__()
@@ -362,6 +395,21 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             f"feature_keys={len(FEATURE_KEYS)}, model_feature_names={len(self.model_feature_names)}."
         )
 
+    def _align_raw_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
+        raw = feature_vector.float()
+        source_names = self._resolve_feature_names(raw.shape[1])
+        if self.model_kind == "deep" and raw.shape[1] == len(self.model_feature_names):
+            return raw
+        return _align_by_names(raw, source_names, self.raw_feature_names)
+
+    def _normalize_processed_features(self, processed: torch.Tensor) -> torch.Tensor:
+        expected_dim = self.feature_mean.shape[0]
+        if processed.shape[1] < expected_dim:
+            processed = F.pad(processed, (0, expected_dim - processed.shape[1]))
+        elif processed.shape[1] > expected_dim:
+            processed = processed[:, :expected_dim]
+        return (processed - self.feature_mean) / self.feature_std
+
     def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
         raw = feature_vector.float()
         source_names = self._resolve_feature_names(raw.shape[1])
@@ -370,13 +418,100 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         else:
             aligned = _align_by_names(raw, source_names, self.raw_feature_names)
             processed = aligned if self.model_kind == "interaction" else _transform_raw_features(aligned, self.raw_feature_names)
+        return self._normalize_processed_features(processed)
 
-        expected_dim = self.feature_mean.shape[0]
-        if processed.shape[1] < expected_dim:
-            processed = F.pad(processed, (0, expected_dim - processed.shape[1]))
-        elif processed.shape[1] > expected_dim:
-            processed = processed[:, :expected_dim]
-        return (processed - self.feature_mean) / self.feature_std
+    def _prepare_aligned_features(self, aligned_features: torch.Tensor) -> torch.Tensor:
+        processed = aligned_features if self.model_kind == "interaction" else _transform_raw_features(aligned_features, self.raw_feature_names)
+        return self._normalize_processed_features(processed)
+
+    def _apply_action_to_cloud_features(
+        self,
+        aligned_raw_features: torch.Tensor,
+        original_mask: torch.Tensor,
+        generated_mask: torch.Tensor,
+        property_maps: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.model_kind != "interaction":
+            return aligned_raw_features
+
+        index = {name: i for i, name in enumerate(self.raw_feature_names)}
+        if not any(name.startswith("cloud_s2_") for name in index):
+            return aligned_raw_features
+
+        updated = aligned_raw_features.clone()
+        original = original_mask.float().clamp(0.0, 1.0)
+        generated = generated_mask.float().clamp(0.0, 1.0)
+        props = property_maps.float()
+        if props.shape[-2:] != generated.shape[-2:]:
+            props = F.interpolate(props, size=generated.shape[-2:], mode="bilinear", align_corners=False)
+        props = props.clamp(0.0, 1.0)
+
+        original_fraction_img = original.mean(dim=(1, 2, 3), keepdim=False)[:, None]
+        generated_fraction_img = generated.mean(dim=(1, 2, 3), keepdim=False)[:, None]
+        fraction_delta = generated_fraction_img - original_fraction_img
+
+        original_prob_mean_img = _weighted_mean(original, original)
+        generated_prob_mean_img = _weighted_mean(generated, generated)
+        prob_mean_delta = generated_prob_mean_img - original_prob_mean_img
+        prob_std_delta = _weighted_std(generated, generated) - _weighted_std(original, original)
+        prob_p90_delta = _masked_quantile(generated, generated, 0.90) - _masked_quantile(original, original, 0.90)
+        edge_delta = _binary_edge_density(generated).view(-1, 1) - _binary_edge_density(original).view(-1, 1)
+        texture_delta = _weighted_std(generated, generated) - _weighted_std(original, original)
+
+        action_strength = props.amax(dim=1, keepdim=True)
+        action_area = action_strength.mean(dim=(1, 2, 3), keepdim=False)[:, None].clamp(0.0, 1.0)
+        action_present = (action_area > 1e-6).float()
+        action_prob = _weighted_mean(props[:, 0:1], action_strength)
+        action_aot = 2.5 * _weighted_mean(props[:, 1:2], action_strength)
+        action_layer = _weighted_mean(props[:, 2:3], action_strength)
+        action_texture = _weighted_mean(props[:, 3:4], action_strength)
+        action_cirrus = _weighted_mean(props[:, 4:5], action_strength)
+
+        def set_feature(name: str, value: torch.Tensor, lo: float | None = None, hi: float | None = None) -> None:
+            pos = index.get(name)
+            if pos is None:
+                return
+            out = value
+            if lo is not None or hi is not None:
+                out = out.clamp(
+                    min=-float("inf") if lo is None else lo,
+                    max=float("inf") if hi is None else hi,
+                )
+            updated[:, pos : pos + 1] = out
+
+        def old(name: str) -> torch.Tensor:
+            pos = index[name]
+            return aligned_raw_features[:, pos : pos + 1]
+
+        if "cloud_s2_fraction" in index:
+            set_feature("cloud_s2_fraction", old("cloud_s2_fraction") + fraction_delta, 0.0, 1.0)
+        if "cloud_s2_prob_mean" in index:
+            set_feature(
+                "cloud_s2_prob_mean",
+                old("cloud_s2_prob_mean") + prob_mean_delta + action_present * action_area * (action_prob - old("cloud_s2_prob_mean")),
+                0.0,
+                1.0,
+            )
+        if "cloud_s2_prob_std" in index:
+            set_feature("cloud_s2_prob_std", old("cloud_s2_prob_std") + prob_std_delta + 0.25 * action_area * action_texture, 0.0, 1.0)
+        if "cloud_s2_prob_p90" in index:
+            set_feature("cloud_s2_prob_p90", old("cloud_s2_prob_p90") + prob_p90_delta + action_area * (action_prob - old("cloud_s2_prob_p90")), 0.0, 1.0)
+        if "cloud_s2_aot_mean" in index:
+            set_feature("cloud_s2_aot_mean", old("cloud_s2_aot_mean") + action_present * action_area * (action_aot - old("cloud_s2_aot_mean")), 0.0, None)
+        if "cloud_s2_cirrus_fraction" in index:
+            set_feature("cloud_s2_cirrus_fraction", old("cloud_s2_cirrus_fraction") + action_area * action_cirrus + 0.25 * fraction_delta, 0.0, 1.0)
+        if "cloud_s2_high_fraction" in index:
+            high_proxy = (action_layer > 0.66).float() * action_prob
+            set_feature("cloud_s2_high_fraction", old("cloud_s2_high_fraction") + action_area * high_proxy + 0.25 * fraction_delta, 0.0, 1.0)
+        if "cloud_s2_medium_fraction" in index:
+            medium_proxy = ((action_layer >= 0.33) & (action_layer <= 0.66)).float() * action_prob
+            set_feature("cloud_s2_medium_fraction", old("cloud_s2_medium_fraction") + action_area * medium_proxy + 0.25 * fraction_delta, 0.0, 1.0)
+        if "cloud_s2_edge_density" in index:
+            set_feature("cloud_s2_edge_density", old("cloud_s2_edge_density") + edge_delta, 0.0, None)
+        if "cloud_s2_texture_std" in index:
+            set_feature("cloud_s2_texture_std", old("cloud_s2_texture_std") + texture_delta + action_area * action_texture, 0.0, None)
+
+        return updated
 
     def _prepare_mask(self, mask: torch.Tensor) -> torch.Tensor:
         if mask.shape[-2:] == (self.image_height, self.image_width):
@@ -418,18 +553,26 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             original = original.contiguous(memory_format=torch.channels_last)
         if generated.ndim == 4 and generated.is_cuda:
             generated = generated.contiguous(memory_format=torch.channels_last)
-        features = self._prepare_features(feature_vector)
+        if self.model_kind == "interaction":
+            aligned_raw = self._align_raw_features(feature_vector)
+            generated_raw = self._apply_action_to_cloud_features(aligned_raw, original, generated, property_maps)
+            original_features = self._prepare_aligned_features(aligned_raw)
+            generated_features = self._prepare_aligned_features(generated_raw)
+        else:
+            generated_raw = None
+            original_features = self._prepare_features(feature_vector)
+            generated_features = original_features
 
         with torch.inference_mode():
             if generated.is_cuda:
                 stacked_masks = torch.cat([original, generated], dim=0)
-                stacked_features = torch.cat([features, features], dim=0)
+                stacked_features = torch.cat([original_features, generated_features], dim=0)
                 with torch.autocast(device_type="cuda", enabled=True):
                     stacked_pred = self._predict_temperature(stacked_masks, stacked_features)
             else:
                 stacked_pred = self._predict_temperature(
                     torch.cat([original, generated], dim=0),
-                    torch.cat([features, features], dim=0),
+                    torch.cat([original_features, generated_features], dim=0),
                 )
 
         original_predicted_temperature, predicted_temperature = stacked_pred.chunk(2, dim=0)
@@ -452,4 +595,6 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             "predicted_temperature_c": predicted_temperature.detach(),
             "temp_error_c": temp_error.detach(),
             "temp_improvement_c": temp_improvement.detach(),
+            "generated_cloud_fraction": generated_raw[:, self.raw_feature_names.index("cloud_s2_fraction") : self.raw_feature_names.index("cloud_s2_fraction") + 1].detach()
+            if generated_raw is not None and "cloud_s2_fraction" in self.raw_feature_names else torch.zeros_like(temp_error).detach(),
         }
