@@ -22,6 +22,8 @@ masks/
 *.ckpt
 *.onnx
 runs/
+checkpoints/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/checkpoints/
 exports/
 
 # Generated diagnostics/evaluation artifacts
