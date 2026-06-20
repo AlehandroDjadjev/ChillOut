@@ -46,51 +46,10 @@ def _transform_raw_features(raw_features: torch.Tensor, raw_feature_names: Seque
     return torch.cat(columns, dim=1)
 
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_ch: int, out_ch: int, dropout: float = 0.0):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.SiLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(out_ch),
-            nn.SiLU(inplace=True),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
-class CloudImageEncoder(nn.Module):
-    def __init__(self, image_embedding_dim: int = 256):
-        super().__init__()
-        self.cnn = nn.Sequential(
-            ConvBlock(1, 32, dropout=0.02),
-            ConvBlock(32, 64, dropout=0.03),
-            ConvBlock(64, 128, dropout=0.05),
-            ConvBlock(128, 192, dropout=0.05),
-            ConvBlock(192, 256, dropout=0.05),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.proj = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(256, image_embedding_dim),
-            nn.LayerNorm(image_embedding_dim),
-            nn.SiLU(inplace=True),
-        )
-
-    def forward(self, mask: torch.Tensor) -> torch.Tensor:
-        return self.proj(self.cnn(mask))
-
-
 class ResBlock(nn.Module):
     def __init__(self, channels: int, dropout: float):
         super().__init__()
         self.net = nn.Sequential(
-            nn.SiLU(inplace=True),
             nn.Conv2d(channels, channels, 3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.SiLU(inplace=True),
@@ -140,32 +99,39 @@ class DeepCloudCNN(nn.Module):
         return self.net(x)
 
 
-class TabularEncoder(nn.Module):
-    def __init__(self, num_features: int, tab_embedding_dim: int = 128):
+class DeepTabularMLP(nn.Module):
+    def __init__(self, num_features: int, embedding_dim: int = 256):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(num_features, 128),
-            nn.LayerNorm(128),
+            nn.Linear(num_features, 256),
+            nn.LayerNorm(256),
             nn.SiLU(inplace=True),
             nn.Dropout(0.10),
-            nn.Linear(128, 192),
-            nn.LayerNorm(192),
+
+            nn.Linear(256, 384),
+            nn.LayerNorm(384),
             nn.SiLU(inplace=True),
             nn.Dropout(0.10),
-            nn.Linear(192, tab_embedding_dim),
-            nn.LayerNorm(tab_embedding_dim),
+
+            nn.Linear(384, 384),
+            nn.LayerNorm(384),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.10),
+
+            nn.Linear(384, embedding_dim),
+            nn.LayerNorm(embedding_dim),
             nn.SiLU(inplace=True),
         )
 
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return self.net(features)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class CloudTempDeepModel(nn.Module):
     def __init__(self, num_features: int):
         super().__init__()
         self.image_encoder = DeepCloudCNN(embedding_dim=512)
-        self.tabular_encoder = TabularEncoder(num_features=num_features, tab_embedding_dim=256)
+        self.tabular_encoder = DeepTabularMLP(num_features=num_features, embedding_dim=256)
         self.head = nn.Sequential(
             nn.Linear(512 + 256, 512),
             nn.LayerNorm(512),
@@ -194,19 +160,6 @@ def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tens
     if not any(key.startswith("module.") for key in state):
         return state
     return {key.removeprefix("module."): value for key, value in state.items()}
-
-
-def _is_deep_checkpoint(state: Dict[str, torch.Tensor]) -> bool:
-    return any(key.startswith("image_encoder.net.") for key in state)
-
-
-def _assert_deep_checkpoint(state: Dict[str, torch.Tensor], resolved_path: Path) -> None:
-    if _is_deep_checkpoint(state):
-        return
-    raise RuntimeError(
-        "The reward wrapper now accepts only deep first-model checkpoints. "
-        f"Checkpoint {resolved_path} does not look like a deep-model state dict."
-    )
 
 
 class CloudTempCheckpointReward(AbstractRewardModel):
@@ -244,7 +197,6 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.register_buffer("feature_std", feature_std)
 
         state = _strip_module_prefix(ckpt["model_state"])
-        _assert_deep_checkpoint(state, resolved)
         self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
         self.model.load_state_dict(state)
         self.model.eval()
