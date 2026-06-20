@@ -12,6 +12,8 @@ dataset*/
 dataset_out/
 dataset.last/
 dataset.quick/
+NewModel/dataset_cloudforce_interaction/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/data/
 cloud_state_dataset/
 cloud_tensors/
 masks/
