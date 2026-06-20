@@ -56,6 +56,22 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def can_use_torch_compile() -> tuple[bool, str]:
+    """Return whether torch.compile/inductor is likely usable.
+
+    On many Windows CUDA installs, Inductor fails at first forward because Triton is
+    missing or unavailable. In that case eager mode is better and avoids the long
+    no-progress compile stall.
+    """
+    if not hasattr(torch, "compile"):
+        return False, "torch.compile is not available in this PyTorch build"
+    try:
+        import triton  # type: ignore  # noqa: F401
+    except Exception as exc:
+        return False, f"Triton is not available: {exc}"
+    return True, "ok"
+
+
 def load_records(data_root: Path, split: str) -> List[Dict[str, Any]]:
     p = data_root / "splits" / f"{split}.jsonl"
     if p.exists():
@@ -86,7 +102,10 @@ def parse_dt(record: Dict[str, Any]) -> np.datetime64:
     raw = record.get("anchor") or record.get("date")
     if raw is None:
         return np.datetime64("NaT")
-    return np.datetime64(str(raw).replace("Z", "+00:00"))
+    s = str(raw).replace("Z", "")
+    if "+" in s:
+        s = s.split("+", 1)[0]
+    return np.datetime64(s)
 
 
 def get_target(record: Dict[str, Any]) -> float:
@@ -201,6 +220,7 @@ class CloudTempSequenceDataset(Dataset):
         lookback: int,
         max_gap_days: float,
         augment: bool,
+        cache_images: bool = False,
     ):
         self.data_root = data_root
         self.records = records
@@ -216,21 +236,40 @@ class CloudTempSequenceDataset(Dataset):
         self.image_width = image_width
         self.lookback = lookback
         self.augment = augment
+        self.cache_images = cache_images
+        self.image_cache: Dict[str, np.ndarray] = {}
         self.windows = build_windows(records, lookback=lookback, max_gap_days=max_gap_days)
+
+        if self.cache_images:
+            unique_paths = sorted({str(r["mask_path"]) for w in self.windows for r in w.records})
+            for rel_path in tqdm(unique_paths, desc="caching masks", leave=False):
+                self.image_cache[rel_path] = self._load_mask_array(rel_path)
 
     def __len__(self) -> int:
         return len(self.windows)
 
-    def load_mask(self, rel_path: str) -> torch.Tensor:
+    def _load_mask_array(self, rel_path: str) -> np.ndarray:
         img = Image.open(self.data_root / rel_path).convert("L")
         if img.size != (self.image_width, self.image_height):
             img = img.resize((self.image_width, self.image_height), Image.BILINEAR)
-        arr = np.asarray(img, dtype=np.float32) / 255.0
+        return np.asarray(img, dtype=np.float32) / 255.0
+
+    def _load_mask_array(self, rel_path: str) -> np.ndarray:
+        img = Image.open(self.data_root / rel_path).convert("L")
+        if img.size != (self.image_width, self.image_height):
+            img = img.resize((self.image_width, self.image_height), Image.BILINEAR)
+        return np.asarray(img, dtype=np.float32) / 255.0
+
+    def load_mask(self, rel_path: str) -> torch.Tensor:
+        if self.cache_images and rel_path in self.image_cache:
+            arr = self.image_cache[rel_path].copy()
+        else:
+            arr = self._load_mask_array(rel_path)
+
         if self.augment:
             if random.random() < 0.5:
                 arr = np.ascontiguousarray(arr[:, ::-1])
             if random.random() < 0.25:
-                # tiny jitter, cloud-only image remains cloud-focused
                 arr = np.clip(arr + np.random.normal(0.0, 0.01, size=arr.shape).astype(np.float32), 0, 1)
         return torch.from_numpy(arr).unsqueeze(0)
 
@@ -251,12 +290,19 @@ class CloudTempSequenceDataset(Dataset):
         target_raw = np.array([get_target(win.records[-1])], dtype=np.float32)
         target_norm = np.array([(target_raw[0] - self.y_norm.mean) / self.y_norm.std], dtype=np.float32)
 
+        last_record = win.records[-1]
+        current_temp = last_record.get("current_temperature_c")
+        if current_temp is None:
+            current_temp = last_record.get("inputs", {}).get("world_temperature_2m", float("nan"))
+        current_temp_raw = np.array([float(current_temp)], dtype=np.float32)
+
         return {
             "mask": torch.stack(masks, dim=0),              # [T,1,H,W]
             "cloud_features": torch.from_numpy(x_cloud),    # [T,Cc]
             "world_features": torch.from_numpy(x_world),    # [T,Cw]
             "target": torch.from_numpy(target_norm),        # [1]
             "target_raw": torch.from_numpy(target_raw),     # [1]
+            "current_temp_raw": torch.from_numpy(current_temp_raw),  # [1]
             "sample_id": win.records[-1].get("sample_id", str(idx)),
             "location": win.records[-1].get("location", win.records[-1].get("city", "")),
             "anchor": win.records[-1].get("anchor", win.records[-1].get("date", "")),
@@ -335,6 +381,19 @@ class MLP(nn.Module):
 
 
 class CloudWorldInteractionModel(nn.Module):
+    """
+    V3 simpler architecture.
+
+    Removed the previous interaction head because diagnostics showed it was mostly noise.
+    The model now has three interpretable components:
+
+      image  : raw Sentinel-2 cloud mask/CNN path
+      cloud  : image + Sentinel cloud scalar path
+      world  : non-temperature world state path
+
+    Final prediction is the sum of image + cloud + world + bias.
+    """
+
     def __init__(
         self,
         num_cloud_features: int,
@@ -348,81 +407,73 @@ class CloudWorldInteractionModel(nn.Module):
         super().__init__()
         self.use_gru = use_gru
         self.cloud_image = CloudImageEncoder(embedding_dim=cloud_dim)
+
+        # Image-only path is directly supervised.
+        self.image_frame = MLP(cloud_dim, [cloud_dim], seq_dim, dropout=dropout)
+
         self.cloud_scalar = MLP(num_cloud_features, [128, 128], cloud_dim // 2, dropout=dropout)
         self.cloud_frame = MLP(cloud_dim + cloud_dim // 2, [cloud_dim], seq_dim, dropout=dropout)
 
         self.world_frame = MLP(num_world_features, [192, 192], seq_dim, dropout=dropout)
 
         if use_gru:
+            self.image_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
             self.cloud_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
             self.world_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
         else:
+            self.image_gru = None
             self.cloud_gru = None
             self.world_gru = None
 
-        self.cloud_to_world = MLP(seq_dim, [seq_dim], seq_dim, dropout=dropout)
-        self.world_gate = nn.Sequential(
-            nn.Linear(seq_dim * 2, seq_dim),
-            nn.SiLU(inplace=True),
-            nn.Linear(seq_dim, seq_dim),
-            nn.Sigmoid(),
-        )
-
-        fuse_dim = seq_dim * 4
+        self.image_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
         self.cloud_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
         self.world_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
-        self.interaction_head = nn.Sequential(
-            nn.Linear(fuse_dim, 192),
-            nn.LayerNorm(192),
-            nn.SiLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Linear(192, 96),
-            nn.SiLU(inplace=True),
-            nn.Linear(96, 1),
-        )
         self.final_bias = nn.Parameter(torch.zeros(1))
 
-    def encode_cloud(self, mask: torch.Tensor, cloud_features: torch.Tensor) -> torch.Tensor:
-        # mask [B,T,1,H,W], cloud_features [B,T,C]
+    def encode_image_sequence(self, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # mask [B,T,1,H,W]
         b, t, c, h, w = mask.shape
-        img_emb = self.cloud_image(mask.view(b * t, c, h, w)).view(b, t, -1)
-        scalar_emb = self.cloud_scalar(cloud_features.view(b * t, cloud_features.size(-1))).view(b, t, -1)
-        frame = self.cloud_frame(torch.cat([img_emb, scalar_emb], dim=-1).view(b * t, -1)).view(b, t, -1)
+        mask_2d = mask.reshape(b * t, c, h, w).contiguous(memory_format=torch.channels_last)
+        img_emb = self.cloud_image(mask_2d).view(b, t, -1)
+        img_frame = self.image_frame(img_emb.reshape(b * t, -1)).view(b, t, -1)
+        if self.use_gru:
+            _, h_last = self.image_gru(img_frame)
+            return h_last[-1], img_emb
+        return img_frame.mean(dim=1), img_emb
+
+    def encode_cloud(self, mask: torch.Tensor, cloud_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        b, t, _, _, _ = mask.shape
+        image_seq, img_emb = self.encode_image_sequence(mask)
+        scalar_emb = self.cloud_scalar(cloud_features.reshape(b * t, cloud_features.size(-1))).view(b, t, -1)
+        frame = self.cloud_frame(torch.cat([img_emb, scalar_emb], dim=-1).reshape(b * t, -1)).view(b, t, -1)
         if self.use_gru:
             _, h_last = self.cloud_gru(frame)
-            return h_last[-1]
-        return frame.mean(dim=1)
+            return h_last[-1], image_seq
+        return frame.mean(dim=1), image_seq
 
     def encode_world(self, world_features: torch.Tensor) -> torch.Tensor:
         b, t, f = world_features.shape
-        frame = self.world_frame(world_features.view(b * t, f)).view(b, t, -1)
+        frame = self.world_frame(world_features.reshape(b * t, f)).view(b, t, -1)
         if self.use_gru:
             _, h_last = self.world_gru(frame)
             return h_last[-1]
         return frame.mean(dim=1)
 
     def forward(self, mask: torch.Tensor, cloud_features: torch.Tensor, world_features: torch.Tensor) -> Dict[str, torch.Tensor]:
-        cloud = self.encode_cloud(mask, cloud_features)
+        cloud, image_only = self.encode_cloud(mask, cloud_features)
         world = self.encode_world(world_features)
 
-        cloud_world = self.cloud_to_world(cloud)
-        gate = self.world_gate(torch.cat([cloud, world], dim=1))
-        gated_world = world * gate + cloud_world * (1.0 - gate)
-
-        interaction_vec = torch.cat([cloud, world, cloud * world, gated_world], dim=1)
-
+        image_pred = self.image_head(image_only)
         cloud_pred = self.cloud_head(cloud)
         world_pred = self.world_head(world)
-        interaction_pred = self.interaction_head(interaction_vec)
 
-        final = cloud_pred + world_pred + interaction_pred + self.final_bias
+        final = image_pred + cloud_pred + world_pred + self.final_bias
 
         return {
             "final": final,
+            "image": image_pred,
             "cloud": cloud_pred,
             "world": world_pred,
-            "interaction": interaction_pred,
-            "gate_mean": gate.mean(dim=1, keepdim=True),
         }
 
 
@@ -498,7 +549,7 @@ def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimiz
                 "use_gru": not args.no_gru,
             },
             "metrics": metrics,
-            "architecture": "CloudWorldInteractionModel",
+            "architecture": "CloudWorldInteractionModelV3_NoInteraction",
         },
         path,
     )
@@ -526,9 +577,15 @@ def main() -> None:
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--world-drop-prob", type=float, default=0.20, help="Randomly zero world features for some batches to force cloud branch learning.")
     parser.add_argument("--world-feature-drop-prob", type=float, default=0.08)
-    parser.add_argument("--cloud-aux-weight", type=float, default=0.35)
+    parser.add_argument("--image-aux-weight", type=float, default=2.50, help="Strong image-only auxiliary loss to force the Sentinel-2 image branch to learn.")
+    parser.add_argument("--cloud-aux-weight", type=float, default=1.00)
     parser.add_argument("--world-aux-weight", type=float, default=0.05)
-    parser.add_argument("--interaction-aux-weight", type=float, default=0.10)
+    parser.add_argument("--cloud-scalar-drop-prob", type=float, default=0.25, help="Randomly zero Sentinel-derived scalar cloud features so the image path matters.")
+    parser.add_argument("--cache-images", action="store_true", help="Cache resized mask images in RAM for faster epochs.")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile only if Triton/Inductor is available. Otherwise it safely skips.")
+    parser.add_argument("--force-compile", action="store_true", help="Force torch.compile even if the safety check says Triton is unavailable.")
+    parser.add_argument("--channels-last", action="store_true", help="Use channels-last conv weights for speed on modern GPUs.")
+    parser.add_argument("--prefetch-factor", type=int, default=4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--amp-dtype", choices=["bf16", "fp16"], default="bf16")
     args = parser.parse_args()
@@ -555,13 +612,21 @@ def main() -> None:
     x_norm = Normalizer.fit(collect_train_feature_matrix(train_records, raw_names))
     y_norm = TargetNormalizer.fit(get_target(r) for r in train_records)
 
-    train_ds = CloudTempSequenceDataset(data_root, train_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, args.augment)
-    val_ds = CloudTempSequenceDataset(data_root, val_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, False)
-    test_ds = CloudTempSequenceDataset(data_root, test_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, False)
+    train_ds = CloudTempSequenceDataset(data_root, train_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, args.augment, cache_images=args.cache_images)
+    val_ds = CloudTempSequenceDataset(data_root, val_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, False, cache_images=args.cache_images)
+    test_ds = CloudTempSequenceDataset(data_root, test_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, False, cache_images=args.cache_images)
 
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=device.type == "cuda", persistent_workers=args.num_workers > 0)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=device.type == "cuda", persistent_workers=args.num_workers > 0)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=device.type == "cuda", persistent_workers=args.num_workers > 0)
+    loader_kwargs = dict(
+        num_workers=args.num_workers,
+        pin_memory=device.type == "cuda",
+        persistent_workers=args.num_workers > 0,
+    )
+    if args.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+
+    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, **loader_kwargs)
+    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
+    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, **loader_kwargs)
 
     model = CloudWorldInteractionModel(
         num_cloud_features=len(cloud_names),
@@ -572,6 +637,19 @@ def main() -> None:
         dropout=args.dropout,
         use_gru=not args.no_gru,
     ).to(device)
+
+    if args.channels_last and device.type == "cuda":
+        model = model.to(memory_format=torch.channels_last)
+
+    if args.compile:
+        ok_compile, compile_reason = can_use_torch_compile()
+        if ok_compile or args.force_compile:
+            print(f"Using torch.compile: {compile_reason}")
+            # reduce-overhead avoids the heaviest max-autotune startup stall.
+            model = torch.compile(model, mode="reduce-overhead")
+        else:
+            print(f"[WARN] Skipping torch.compile: {compile_reason}")
+            print("[WARN] Continue in eager mode. Remove --compile to hide this warning.")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_fn = nn.SmoothL1Loss(beta=0.75)
@@ -591,6 +669,9 @@ def main() -> None:
         "target_mean_c": y_norm.mean,
         "target_std_c": y_norm.std,
         "lookback": args.lookback,
+        "image_aux_weight": args.image_aux_weight,
+        "cloud_scalar_drop_prob": args.cloud_scalar_drop_prob,
+        "cache_images": args.cache_images,
     }, indent=2))
 
     best_mae = float("inf")
@@ -616,18 +697,22 @@ def main() -> None:
                 drop = (torch.rand(world.shape[-1], device=device) < args.world_feature_drop_prob).float()
                 world = world * (1.0 - drop.view(1, 1, -1))
 
+            if args.cloud_scalar_drop_prob > 0:
+                drop = (torch.rand(cloud.shape[-1], device=device) < args.cloud_scalar_drop_prob).float()
+                cloud = cloud * (1.0 - drop.view(1, 1, -1))
+
             optimizer.zero_grad(set_to_none=True)
             with autocast("cuda", enabled=device.type == "cuda", dtype=amp_dtype):
                 out = model(mask, cloud, world)
                 loss_final = loss_fn(out["final"], target)
+                loss_image = loss_fn(out["image"], target)
                 loss_cloud = loss_fn(out["cloud"], target)
                 loss_world = loss_fn(out["world"], target)
-                loss_inter = loss_fn(out["interaction"], target)
                 loss = (
                     loss_final
+                    + args.image_aux_weight * loss_image
                     + args.cloud_aux_weight * loss_cloud
                     + args.world_aux_weight * loss_world
-                    + args.interaction_aux_weight * loss_inter
                 )
 
             if scaler.is_enabled():

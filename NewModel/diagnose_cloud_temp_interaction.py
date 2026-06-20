@@ -53,7 +53,7 @@ def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
             w.writerow(row)
 
 
-def apply_variant(batch: Dict[str, Any], variant: str, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def apply_variant(batch: Dict[str, Any], variant: str, device: torch.device, temp_world_idx: int | None = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     mask = batch["mask"].to(device)
     cloud = batch["cloud_features"].to(device)
     world = batch["world_features"].to(device)
@@ -82,6 +82,12 @@ def apply_variant(batch: Dict[str, Any], variant: str, device: torch.device) -> 
             return mask, cloud, world[perm]
         return mask, cloud, world
 
+    if variant == "no_temp_input":
+        if temp_world_idx is not None and 0 <= temp_world_idx < world.size(-1):
+            world = world.clone()
+            world[:, :, temp_world_idx] = 0.0
+        return mask, cloud, world
+
     if variant == "all_zero":
         return torch.zeros_like(mask), torch.zeros_like(cloud), torch.zeros_like(world)
 
@@ -89,7 +95,7 @@ def apply_variant(batch: Dict[str, Any], variant: str, device: torch.device) -> 
 
 
 @torch.no_grad()
-def eval_variants(model, loader, device, y_norm: TargetNormalizer, variants: List[str]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def eval_variants(model, loader, device, y_norm: TargetNormalizer, variants: List[str], temp_world_idx: int | None = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     model.eval()
     rows = []
     component_rows = []
@@ -102,16 +108,17 @@ def eval_variants(model, loader, device, y_norm: TargetNormalizer, variants: Lis
         anchors = []
         sample_ids = []
 
-        comp_preds = {"cloud": [], "world": [], "interaction": [], "final": []}
+        comp_preds = {"image": [], "cloud": [], "world": [], "final": []}
 
         for batch in tqdm(loader, desc=f"eval {variant}", leave=False):
-            mask, cloud, world = apply_variant(batch, variant, device)
+            mask, cloud, world = apply_variant(batch, variant, device, temp_world_idx=temp_world_idx)
             target_raw = batch["target_raw"].to(device)
 
             out = model(mask, cloud, world)
 
-            for name in comp_preds:
-                comp_preds[name].append(y_norm.inverse_tensor(out[name].float()).detach().cpu())
+            for name in list(comp_preds.keys()):
+                if name in out:
+                    comp_preds[name].append(y_norm.inverse_tensor(out[name].float()).detach().cpu())
 
             pred_raw = y_norm.inverse_tensor(out["final"].float())
             preds.append(pred_raw.detach().cpu())
@@ -150,7 +157,79 @@ def eval_variants(model, loader, device, y_norm: TargetNormalizer, variants: Lis
                     heapq.heapreplace(worst_heap, item)
 
     worst = [r for _, r in sorted(worst_heap, key=lambda x: x[0], reverse=True)]
-    return rows, component_rows, worst
+    per_location_rows = []
+    # Per-location metrics are computed in a second pass below for normal/diagnostic clarity.
+    return rows, component_rows, worst, per_location_rows
+
+
+@torch.no_grad()
+def baseline_and_location_metrics(model, loader, device, y_norm: TargetNormalizer, variants: List[str], temp_world_idx: int | None = None, train_city_means: Dict[str, float] | None = None) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    model.eval()
+    train_city_means = train_city_means or {}
+
+    by_name: Dict[str, Dict[str, List[float]]] = {}
+    baselines: Dict[str, Dict[str, List[float]]] = {
+        "current_temp_persistence": {"pred": [], "target": []},
+        "train_mean": {"pred": [], "target": []},
+        "city_train_mean": {"pred": [], "target": []},
+    }
+
+    for batch in tqdm(loader, desc="baselines/per-location", leave=False):
+        target_raw = batch["target_raw"].float()
+        current_raw = batch.get("current_temp_raw")
+        if current_raw is None:
+            current_raw = torch.full_like(target_raw, float("nan"))
+        current_raw = current_raw.float()
+
+        locations = list(batch["location"])
+        train_mean_pred = torch.full_like(target_raw, float(y_norm.mean))
+        city_mean_pred = torch.tensor(
+            [[float(train_city_means.get(str(loc), y_norm.mean))] for loc in locations],
+            dtype=torch.float32,
+        )
+
+        for bname, pred in [
+            ("current_temp_persistence", current_raw),
+            ("train_mean", train_mean_pred),
+            ("city_train_mean", city_mean_pred),
+        ]:
+            valid = torch.isfinite(pred).flatten()
+            if valid.any():
+                baselines[bname]["pred"] += [float(x) for x in pred.flatten()[valid]]
+                baselines[bname]["target"] += [float(x) for x in target_raw.flatten()[valid]]
+
+        for variant in variants:
+            mask, cloud, world = apply_variant(batch, variant, device, temp_world_idx=temp_world_idx)
+            out = model(mask, cloud, world)
+            pred = y_norm.inverse_tensor(out["final"].float()).detach().cpu().flatten()
+            targ = target_raw.flatten()
+
+            for i, loc in enumerate(locations):
+                key = f"variant::{variant}::{loc}"
+                rec = by_name.setdefault(key, {"pred": [], "target": [], "variant": variant, "location": str(loc)})
+                rec["pred"].append(float(pred[i]))
+                rec["target"].append(float(targ[i]))
+
+    baseline_rows: List[Dict[str, Any]] = []
+    for name, vals in baselines.items():
+        if not vals["pred"]:
+            continue
+        p = torch.tensor(vals["pred"]).view(-1, 1)
+        y = torch.tensor(vals["target"]).view(-1, 1)
+        baseline_rows.append({"name": name, **metrics_from_pred(p, y)})
+
+    per_location_rows: List[Dict[str, Any]] = []
+    for _, vals in sorted(by_name.items(), key=lambda kv: (kv[1]["location"], kv[1]["variant"])):
+        p = torch.tensor(vals["pred"]).view(-1, 1)
+        y = torch.tensor(vals["target"]).view(-1, 1)
+        per_location_rows.append({
+            "variant": vals["variant"],
+            "location": vals["location"],
+            "n": len(vals["pred"]),
+            **metrics_from_pred(p, y),
+        })
+
+    return baseline_rows, per_location_rows
 
 
 @torch.no_grad()
@@ -229,6 +308,7 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--feature-importance", action="store_true")
     parser.add_argument("--feature-importance-batches", type=int, default=20)
+    parser.add_argument("--benchmark-location", default=None, help="Optional location/city filter, e.g. sofia_bg.")
     args = parser.parse_args()
 
     data_root = Path(args.data_root).resolve()
@@ -250,6 +330,14 @@ def main() -> None:
     lookback = int(ckpt.get("lookback", 4))
 
     records = load_records(data_root, args.split)
+    if args.benchmark_location:
+        key = args.benchmark_location.lower()
+        records = [
+            r for r in records
+            if key in str(r.get("location", "")).lower() or key in str(r.get("city", "")).lower()
+        ]
+        if not records:
+            raise SystemExit(f"No records matched --benchmark-location {args.benchmark_location!r}")
     ds = CloudTempSequenceDataset(
         data_root=data_root,
         records=records,
@@ -271,11 +359,27 @@ def main() -> None:
     model = CloudWorldInteractionModel(**model_kwargs).to(device)
     model.load_state_dict(ckpt["model_state"])
 
+    temp_world_idx = world_names.index("world_temperature_2m") if "world_temperature_2m" in world_names else None
+
     variants = ["normal", "no_cloud_image", "no_cloud_all", "cloud_shuffle", "no_world", "world_shuffle", "all_zero"]
-    metric_rows, component_rows, worst_rows = eval_variants(model, loader, device, y_norm, variants)
+    metric_rows, component_rows, worst_rows, _ = eval_variants(model, loader, device, y_norm, variants, temp_world_idx=temp_world_idx)
+
+    train_records_for_means = load_records(data_root, "train")
+    train_city_values: Dict[str, List[float]] = {}
+    for r in train_records_for_means:
+        loc = str(r.get("location", r.get("city", "")))
+        if "target_temperature_c" in r:
+            train_city_values.setdefault(loc, []).append(float(r["target_temperature_c"]))
+    train_city_means = {k: float(np.mean(v)) for k, v in train_city_values.items() if v}
+
+    baseline_rows, per_location_rows = baseline_and_location_metrics(
+        model, loader, device, y_norm, variants, temp_world_idx=temp_world_idx, train_city_means=train_city_means
+    )
 
     write_csv(out_dir / "metrics_by_variant.csv", metric_rows)
     write_csv(out_dir / "component_metrics.csv", component_rows)
+    write_csv(out_dir / "baseline_metrics.csv", baseline_rows)
+    write_csv(out_dir / "per_location_metrics.csv", per_location_rows)
     write_csv(out_dir / "worst_samples.csv", worst_rows)
 
     summary = {
@@ -284,6 +388,9 @@ def main() -> None:
         "num_windows": len(ds),
         "variants": metric_rows,
         "components": component_rows,
+        "baselines": baseline_rows,
+        "benchmark_location": args.benchmark_location,
+        "note": "V3 removes current temperature from model inputs and removes the interaction head.",
         "cloud_feature_names": cloud_names,
         "world_feature_names": world_names,
     }
@@ -298,6 +405,8 @@ def main() -> None:
     print("DONE")
     print(f"wrote {out_dir / 'metrics_by_variant.csv'}")
     print(f"wrote {out_dir / 'component_metrics.csv'}")
+    print(f"wrote {out_dir / 'baseline_metrics.csv'}")
+    print(f"wrote {out_dir / 'per_location_metrics.csv'}")
     print(f"wrote {out_dir / 'worst_samples.csv'}")
     if args.feature_importance:
         print(f"wrote {out_dir / 'input_feature_importance.csv'}")
@@ -305,6 +414,10 @@ def main() -> None:
     print("\nVariant metrics:")
     for row in metric_rows:
         print(f"{row['variant']:<16} mae={row['mae_c']:.4f}C rmse={row['rmse_c']:.4f}C corr={row['corr']:.3f}")
+
+    print("\nBaselines:")
+    for row in baseline_rows:
+        print(f"{row['name']:<24} mae={row['mae_c']:.4f}C rmse={row['rmse_c']:.4f}C corr={row['corr']:.3f}")
 
     print("\nComponent metrics on normal input:")
     for row in component_rows:
