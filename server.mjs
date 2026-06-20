@@ -13,30 +13,76 @@ const defaults = {
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token",
   processUrl: "https://sh.dataspace.copernicus.eu/process/v1",
   catalogUrl: "https://sh.dataspace.copernicus.eu/catalog/v1/search",
+  statsUrl: "https://sh.dataspace.copernicus.eu/statistics/v1",
   meteoUrl: "https://archive-api.open-meteo.com/v1/archive",
 };
 
 const S5P_FIELDS = {
-  cloud_fraction: { band: "CLOUD_FRACTION", min: 0, max: 1, label: "Cloud fraction" },
+  cloud_fraction: {
+    band: "CLOUD_FRACTION",
+    min: 0,
+    max: 1,
+    label: "Cloud fraction",
+    unit: "fraction",
+  },
   cloud_optical_thickness: {
     band: "CLOUD_OPTICAL_THICKNESS",
     min: 0,
     max: 250,
     label: "Cloud thickness",
+    unit: "a.u.",
   },
-  cloud_top_height: { band: "CLOUD_TOP_HEIGHT", min: 0, max: 20000, label: "Cloud top height" },
+  cloud_top_height: {
+    band: "CLOUD_TOP_HEIGHT",
+    min: 0,
+    max: 20000,
+    label: "Cloud top height",
+    unit: "m",
+  },
   cloud_top_pressure: {
     band: "CLOUD_TOP_PRESSURE",
     min: 1000,
     max: 110000,
     label: "Cloud top pressure",
+    unit: "Pa",
   },
-  no2: { band: "NO2", min: 0, max: 0.0003, label: "NO2" },
-  o3: { band: "O3", min: 0, max: 0.36, label: "Ozone" },
-  co: { band: "CO", min: 0, max: 0.1, label: "CO" },
-  ch4: { band: "CH4", min: 1600, max: 2000, label: "Methane" },
-  so2: { band: "SO2", min: 0, max: 0.01, label: "SO2" },
-  aerosol_index: { band: "AER_AI_340_380", min: -1, max: 5, label: "Aerosol index" },
+  no2: { band: "NO2", min: 0, max: 0.0003, label: "NO2", unit: "mol/m^2" },
+  o3: { band: "O3", min: 0, max: 0.36, label: "Ozone", unit: "mol/m^2" },
+  co: { band: "CO", min: 0, max: 0.1, label: "CO", unit: "mol/m^2" },
+  ch4: { band: "CH4", min: 1600, max: 2000, label: "Methane", unit: "ppb" },
+  so2: { band: "SO2", min: 0, max: 0.01, label: "SO2", unit: "mol/m^2" },
+  aerosol_index: {
+    band: "AER_AI_340_380",
+    min: -1,
+    max: 5,
+    label: "Aerosol index",
+    unit: "index",
+  },
+};
+
+const S3_FIELDS = {
+  cloud_pressure_proxy: {
+    band: "B15",
+    min: 0,
+    max: 1,
+    label: "Cloud pressure proxy",
+    unit: "reflectance",
+  },
+  humidity: { band: "HUMIDITY", min: 0, max: 100, label: "Humidity", unit: "%" },
+  sea_level_pressure: {
+    band: "SEA_LEVEL_PRESSURE",
+    min: 980,
+    max: 1030,
+    label: "Sea level pressure",
+    unit: "hPa",
+  },
+  water_vapour: {
+    band: "TOTAL_COLUMN_WATER_VAPOUR",
+    min: 0,
+    max: 70,
+    label: "Water vapour",
+    unit: "kg/m^2",
+  },
 };
 
 const ERA5_FIELDS = {
@@ -71,6 +117,11 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/process") {
       await handleProcess(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/statistics") {
+      await handleStatistics(request, response);
       return;
     }
 
@@ -110,13 +161,31 @@ async function handleLatestScenes(request, response) {
   }
 
   if (source === "sentinel5p") {
-    const scenes = await fetchCopernicusScenes({ collection: "sentinel-5p-l2", limit });
+    const scenes = await fetchCopernicusScenes({
+      source,
+      collection: "sentinel-5p-l2",
+      limit,
+    });
     sendJson(response, 200, { source, scenes });
     return;
   }
 
   if (source === "sentinel2") {
-    const scenes = await fetchCopernicusScenes({ collection: "sentinel-2-l2a", limit });
+    const scenes = await fetchCopernicusScenes({
+      source,
+      collection: "sentinel-2-l2a",
+      limit,
+    });
+    sendJson(response, 200, { source, scenes });
+    return;
+  }
+
+  if (source === "sentinel3olci") {
+    const scenes = await fetchCopernicusScenes({
+      source,
+      collection: "sentinel-3-olci",
+      limit,
+    });
     sendJson(response, 200, { source, scenes });
     return;
   }
@@ -157,7 +226,60 @@ async function handleProcess(request, response) {
     return;
   }
 
+  if (source === "sentinel3olci") {
+    await proxyCopernicusProcess(
+      response,
+      buildSentinel3OlciProcessRequest(body.item, body.field, body),
+      body.item?.label || body.item?.date || "Sentinel-3 OLCI scene"
+    );
+    return;
+  }
+
   sendJson(response, 400, { message: `Unknown source: ${source}` });
+}
+
+async function handleStatistics(request, response) {
+  const body = await readJsonBody(request);
+  const source = normalizeSource(body.source);
+  const field = String(body.field || "").trim();
+  const days = clampNumber(body.days, 1, 30, latestItemCount);
+  const bbox = parseBbox(body.bbox) || getPublicConfig().bbox;
+
+  if (source === "era5") {
+    const meta = ERA5_FIELDS[field] || ERA5_FIELDS.cloud_cover;
+    const points = await buildEra5StatisticsSeries(meta.hourly, days, bbox);
+    sendJson(response, 200, {
+      source,
+      field,
+      label: meta.label,
+      unit: meta.unit,
+      points,
+    });
+    return;
+  }
+
+  const fieldMeta = getStatFieldMeta(source, field);
+
+  if (!fieldMeta) {
+    sendJson(response, 400, { message: `Statistics are not available for ${source} / ${field}.` });
+    return;
+  }
+
+  const points = await fetchCopernicusStatisticsSeries({
+    source,
+    field,
+    fieldMeta,
+    days,
+    bbox,
+  });
+
+  sendJson(response, 200, {
+    source,
+    field,
+    label: fieldMeta.label,
+    unit: fieldMeta.unit || null,
+    points,
+  });
 }
 
 async function proxyCopernicusProcess(response, requestBody, description) {
@@ -187,11 +309,16 @@ async function proxyCopernicusProcess(response, requestBody, description) {
   response.end(payload);
 }
 
-async function fetchCopernicusScenes({ collection, limit }) {
+async function fetchCopernicusScenes({ source, collection, limit }) {
   const accessToken = await getAccessToken();
   const end = new Date();
   const windowsInDays = [7, 14, 30, 60, 120, 240, 365];
   const byDate = new Map();
+  const sourceDetail = {
+    sentinel2: "Sentinel-2 surface scene",
+    sentinel5p: "Sentinel-5P daily pass",
+    sentinel3olci: "Sentinel-3 OLCI atmospheric scene",
+  }[source] || "Scene";
 
   for (const days of windowsInDays) {
     const start = new Date(end);
@@ -216,11 +343,11 @@ async function fetchCopernicusScenes({ collection, limit }) {
       const date = datetime.slice(0, 10);
       if (!byDate.has(date)) {
         byDate.set(date, {
-          source: collection === "sentinel-5p-l2" ? "sentinel5p" : "sentinel2",
+          source,
           date,
           datetime,
           label: date,
-          detail: collection === "sentinel-5p-l2" ? "Sentinel-5P daily pass" : "Sentinel-2 surface scene",
+          detail: sourceDetail,
         });
       }
     }
@@ -233,6 +360,73 @@ async function fetchCopernicusScenes({ collection, limit }) {
   return [...byDate.values()]
     .sort((left, right) => right.datetime.localeCompare(left.datetime))
     .slice(0, limit);
+}
+
+async function fetchCopernicusStatisticsSeries({ source, field, fieldMeta, days, bbox }) {
+  const accessToken = await getAccessToken();
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - days);
+  const requestBody = buildStatisticsRequest({
+    source,
+    field,
+    fieldMeta,
+    from: start.toISOString(),
+    to: end.toISOString(),
+    days,
+    bbox,
+  });
+
+  const statsResponse = await fetch(process.env.COPERNICUS_STATS_URL || defaults.statsUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  const text = await statsResponse.text();
+
+  if (!statsResponse.ok) {
+    throw new Error(`Copernicus statistics request failed: ${text}`);
+  }
+
+  const payload = JSON.parse(text);
+  const statsByDate = new Map();
+
+  for (const entry of payload.data || []) {
+    const date = String(entry.interval?.from || "").slice(0, 10);
+    const stats = entry.outputs?.value?.bands?.B0?.stats;
+
+    if (!date || !stats) {
+      continue;
+    }
+
+    statsByDate.set(date, {
+      date,
+      mean: Number(stats.mean ?? stats.average ?? 0),
+      min: Number(stats.min ?? stats.minimum ?? 0),
+      max: Number(stats.max ?? stats.maximum ?? 0),
+      sampleCount: Number(stats.sampleCount ?? 0),
+      noDataCount: Number(stats.noDataCount ?? 0),
+    });
+  }
+
+  return buildRecentDays(days)
+    .reverse()
+    .map((date) =>
+      statsByDate.get(date) || {
+        date,
+        mean: null,
+        min: null,
+        max: null,
+        sampleCount: 0,
+        noDataCount: 0,
+      }
+    );
 }
 
 async function searchCatalog(accessToken, { collection, from, to }) {
@@ -301,6 +495,46 @@ function buildSentinel5pProcessRequest(item, field, options) {
   };
 }
 
+function buildSentinel3OlciProcessRequest(item, field, options) {
+  const fieldMeta = S3_FIELDS[field] || S3_FIELDS.cloud_pressure_proxy;
+  const date = item?.date || item?.datetime?.slice(0, 10);
+
+  return {
+    input: {
+      bounds: {
+        bbox: options.bbox || getPublicConfig().bbox,
+      },
+      data: [
+        {
+          type: "sentinel-3-olci",
+          dataFilter: {
+            timeRange: {
+              from: `${date}T00:00:00Z`,
+              to: `${date}T23:59:59Z`,
+            },
+            mosaickingOrder: "mostRecent",
+          },
+          processing: {
+            upsampling: "NEAREST",
+            downsampling: "NEAREST",
+          },
+        },
+      ],
+    },
+    output: {
+      width: clampNumber(options.width, 32, 4096, 768),
+      height: clampNumber(options.height, 32, 4096, 480),
+      responses: [
+        {
+          identifier: "default",
+          format: { type: "image/png" },
+        },
+      ],
+    },
+    evalscript: buildSingleBandEvalscript(fieldMeta.band, fieldMeta.min, fieldMeta.max),
+  };
+}
+
 function buildSentinel2ProcessRequest(item, field, options) {
   const date = item?.date || item?.datetime?.slice(0, 10);
   const mode = field || "natural_color";
@@ -341,6 +575,73 @@ function buildSentinel2ProcessRequest(item, field, options) {
   };
 }
 
+function buildStatisticsRequest({ source, field, fieldMeta, from, to, days, bbox }) {
+  const resolution = getStatisticsResolution(source, field, days);
+  const dataType = getStatisticsDataType(source);
+
+  return {
+    input: {
+      bounds: {
+        bbox: bbox || getPublicConfig().bbox,
+        properties: {
+          crs: "http://www.opengis.net/def/crs/OGC/1.3/CRS84",
+        },
+      },
+      data: [
+        {
+          type: dataType,
+          dataFilter: getStatisticsDataFilter(source),
+        },
+      ],
+    },
+    aggregation: {
+      timeRange: {
+        from,
+        to,
+      },
+      aggregationInterval: {
+        of: "P1D",
+      },
+      resx: resolution,
+      resy: resolution,
+      evalscript: buildStatisticsEvalscript(fieldMeta.band, fieldMeta.normalize),
+    },
+  };
+}
+
+function buildStatisticsEvalscript(band, normalizeValue) {
+  const normalizeBody = typeof normalizeValue === "function" ? normalizeValue.toString() : null;
+
+  return `//VERSION=3
+function setup() {
+  return {
+    input: ["${band}", "dataMask"],
+    output: [
+      {
+        id: "value",
+        bands: 1,
+        sampleType: "FLOAT32"
+      },
+      {
+        id: "dataMask",
+        bands: 1
+      }
+    ]
+  };
+}
+
+function normalize(value) {
+  ${normalizeBody ? `return (${normalizeBody})(value);` : "return value;"}
+}
+
+function evaluatePixel(sample) {
+  return {
+    value: [normalize(sample.${band})],
+    dataMask: [sample.dataMask]
+  };
+}`;
+}
+
 function buildSingleBandEvalscript(band, min, max) {
   return `//VERSION=3
 function setup() {
@@ -348,6 +649,25 @@ function setup() {
     input: ["${band}", "dataMask"],
     output: { bands: 4, sampleType: "AUTO" }
   };
+}
+
+async function buildEra5StatisticsSeries(hourlyVar, days, bbox) {
+  const dates = buildRecentDays(days).reverse();
+  const points = [];
+
+  for (const date of dates) {
+    const series = await fetchEra5Series(date, hourlyVar, bbox);
+    points.push({
+      date,
+      mean: series.mean,
+      min: null,
+      max: null,
+      sampleCount: series.values.length,
+      noDataCount: 0,
+    });
+  }
+
+  return points;
 }
 
 function clamp(value, min, max) {
@@ -483,9 +803,8 @@ async function renderEra5Svg(date, field, options) {
 </svg>`;
 }
 
-async function fetchEra5Series(date, hourlyVar) {
-  const config = getPublicConfig();
-  const center = bboxCenter(config.bbox);
+async function fetchEra5Series(date, hourlyVar, bbox) {
+  const center = bboxCenter(bbox || getPublicConfig().bbox);
   const url = new URL(process.env.COPERNICUS_METEO_URL || defaults.meteoUrl);
 
   url.searchParams.set("latitude", String(center.lat));
@@ -668,6 +987,14 @@ function parseBbox(value) {
     return null;
   }
 
+  if (Array.isArray(value)) {
+    const bbox = value
+      .map((part) => Number(part))
+      .filter((part) => Number.isFinite(part));
+
+    return bbox.length === 4 ? bbox : null;
+  }
+
   const bbox = value
     .split(",")
     .map((part) => Number(part.trim()))
@@ -722,11 +1049,102 @@ function normalizeSource(source) {
     return "sentinel5p";
   }
 
+  if (value === "sentinel-3-olci" || value === "sentinel3" || value === "s3olci") {
+    return "sentinel3olci";
+  }
+
   if (value === "era-5" || value === "era_5") {
     return "era5";
   }
 
   return value;
+}
+
+function getStatFieldMeta(source, field) {
+  if (source === "sentinel5p") {
+    return S5P_FIELDS[field] || null;
+  }
+
+  if (source === "sentinel3olci") {
+    return S3_FIELDS[field] || null;
+  }
+
+  if (source === "sentinel2") {
+    if (field === "cloud_probability") {
+      return {
+        band: "CLP",
+        min: 0,
+        max: 255,
+        label: "Cloud probability",
+        unit: "fraction",
+        normalize: (value) => value / 255,
+      };
+    }
+
+    if (field === "cloud_mask") {
+      return {
+        band: "CLM",
+        min: 0,
+        max: 1,
+        label: "Cloud mask",
+        unit: "fraction",
+        normalize: (value) => value,
+      };
+    }
+  }
+
+  return null;
+}
+
+function getStatisticsDataType(source) {
+  if (source === "sentinel5p") {
+    return "sentinel-5p-l2";
+  }
+
+  if (source === "sentinel3olci") {
+    return "sentinel-3-olci";
+  }
+
+  if (source === "sentinel2") {
+    return "sentinel-2-l2a";
+  }
+
+  throw new Error(`Statistics are not available for source ${source}.`);
+}
+
+function getStatisticsDataFilter(source) {
+  if (source === "sentinel5p") {
+    return {
+      mosaickingOrder: "mostRecent",
+      timeliness: "OFFL",
+    };
+  }
+
+  if (source === "sentinel2") {
+    return {
+      mosaickingOrder: "leastCC",
+    };
+  }
+
+  return {
+    mosaickingOrder: "mostRecent",
+  };
+}
+
+function getStatisticsResolution(source, field, days) {
+  if (source === "sentinel5p") {
+    return 0.01;
+  }
+
+  if (source === "sentinel3olci") {
+    return 0.003;
+  }
+
+  if (source === "sentinel2") {
+    return field === "cloud_mask" ? 0.001 : 0.0005;
+  }
+
+  return 0.01;
 }
 
 function clampNumber(value, min, max, fallback) {

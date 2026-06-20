@@ -117,7 +117,7 @@ button:focus-visible {
 
 .inline-fields {
   display: grid;
-  grid-template-columns: 120px 1fr;
+  grid-template-columns: 120px minmax(0, 1fr) 100px;
   gap: 12px;
 }
 
@@ -200,6 +200,10 @@ dd {
   overflow: hidden;
 }
 
+.moment-card--chart {
+  grid-column: 1 / -1;
+}
+
 .moment-controls {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
@@ -247,6 +251,66 @@ dd {
 }
 
 .card-footer strong {
+  color: var(--ink);
+}
+
+.chart-card {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+}
+
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: end;
+}
+
+.chart-title {
+  display: grid;
+  gap: 4px;
+}
+
+.chart-title strong {
+  font-size: 1rem;
+  color: var(--ink);
+}
+
+.chart-title span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.chart-figure {
+  width: 100%;
+  min-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(15, 122, 138, 0.08), rgba(255, 255, 255, 0.82));
+}
+
+.chart-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px 12px;
+}
+
+.chart-legend-item {
+  display: grid;
+  gap: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.chart-legend-item span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+}
+
+.chart-legend-item strong {
+  font-size: 0.9rem;
   color: var(--ink);
 }
 

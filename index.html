@@ -29,6 +29,14 @@
               Field
               <select id="field"></select>
             </label>
+
+            <label>
+              View
+              <select id="view">
+                <option value="scenes">Scenes</option>
+                <option value="chart">Chart</option>
+              </select>
+            </label>
           </div>
 
           <div class="actions">
@@ -36,7 +44,7 @@
           </div>
 
           <p id="global-status" class="status" role="status">
-            Choose a source and field, then load the latest 7 samples.
+            Choose a source, field, and view, then load the latest 7 samples.
           </p>
         </form>
       </section>
@@ -53,7 +61,7 @@
           </div>
           <div>
             <dt>Collection</dt>
-            <dd>sentinel-2-l2a / sentinel-5p-l2 / ERA5</dd>
+            <dd>sentinel-2-l2a / sentinel-3-olci / sentinel-5p-l2 / ERA5</dd>
           </div>
         </dl>
       </section>

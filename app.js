@@ -49,6 +49,7 @@ const SOURCE_OPTIONS = {
 const DEFAULT_CONFIG = {
   processUrl: "/api/process",
   latestScenesUrl: "/api/latest-scenes",
+  statisticsUrl: "/api/statistics",
   bbox: [25.43, 42.31, 25.86, 42.57],
   width: 768,
   height: 480,
@@ -63,6 +64,7 @@ let items = [];
 const elements = {
   source: document.querySelector("#source"),
   field: document.querySelector("#field"),
+  view: document.querySelector("#view"),
   form: document.querySelector("#settings-form"),
   loadAll: document.querySelector("#load-all"),
   globalStatus: document.querySelector("#global-status"),
@@ -80,6 +82,7 @@ async function init() {
 
   populateSourceOptions();
   populateFieldOptions(elements.source.value);
+  syncViewAvailability();
 
   elements.source.addEventListener("change", () => {
     populateFieldOptions(elements.source.value);
@@ -89,6 +92,14 @@ async function init() {
   });
 
   elements.field.addEventListener("change", () => {
+    syncViewAvailability();
+    items = [];
+    renderItems();
+    updateActionLabel();
+  });
+
+  elements.view.addEventListener("change", () => {
+    syncViewAvailability();
     items = [];
     renderItems();
     updateActionLabel();
@@ -123,6 +134,20 @@ function populateFieldOptions(source) {
     .join("");
 
   elements.field.value = fields[0]?.value || "";
+  syncViewAvailability();
+}
+
+function syncViewAvailability() {
+  const canChart = supportsStatistics(elements.source.value, elements.field.value);
+  const chartOption = elements.view.querySelector('option[value="chart"]');
+
+  if (chartOption) {
+    chartOption.disabled = !canChart;
+  }
+
+  if (!canChart && elements.view.value === "chart") {
+    elements.view.value = "scenes";
+  }
 }
 
 function updateActionLabel() {
@@ -130,8 +155,11 @@ function updateActionLabel() {
   const fieldLabel =
     SOURCE_OPTIONS[elements.source.value]?.fields.find(
       (entry) => entry.value === elements.field.value
-    )?.label || "field";
-  elements.loadAll.textContent = `Load latest ${latestItemCount} ${sourceLabel} ${fieldLabel.toLowerCase()} samples`;
+      )?.label || "field";
+  elements.loadAll.textContent =
+    elements.view.value === "chart"
+      ? `Load latest ${latestItemCount} days of ${sourceLabel} ${fieldLabel.toLowerCase()}`
+      : `Load latest ${latestItemCount} ${sourceLabel} ${fieldLabel.toLowerCase()} samples`;
 }
 
 async function loadPublicConfig() {
@@ -150,6 +178,11 @@ async function loadPublicConfig() {
 
 function renderItems() {
   elements.moments.innerHTML = "";
+
+  if (elements.view.value === "chart") {
+    renderChart();
+    return;
+  }
 
   if (items.length === 0) {
     const emptyCard = document.createElement("article");
@@ -204,9 +237,32 @@ async function loadLatestItems() {
   const source = elements.source.value;
   const field = elements.field.value;
   elements.loadAll.disabled = true;
-  setStatus(`Finding the latest ${latestItemCount} ${SOURCE_OPTIONS[source].label} samples...`);
+  if (elements.view.value === "chart") {
+    setStatus(`Finding the latest ${latestItemCount} days of ${SOURCE_OPTIONS[source].label} ${getFieldLabel(source, field).toLowerCase()}...`);
+  } else {
+    setStatus(`Finding the latest ${latestItemCount} ${SOURCE_OPTIONS[source].label} samples...`);
+  }
 
   try {
+    if (elements.view.value === "chart") {
+      items = await fetchStatistics(source, field);
+      renderItems();
+
+      if (items.length === 0) {
+        setStatus(`No recent ${SOURCE_OPTIONS[source].label} measurements were found.`, true);
+        return;
+      }
+
+      setStatus(`Rendering ${items.length} ${SOURCE_OPTIONS[source].label} measurements...`);
+      setStatus(
+        `Done. Showing the latest ${items.length} days of ${SOURCE_OPTIONS[source].label} ${getFieldLabel(
+          source,
+          field
+        ).toLowerCase()}.`
+      );
+      return;
+    }
+
     items = await fetchLatestItems(source);
     renderItems();
 
@@ -247,6 +303,27 @@ async function fetchLatestItems(source) {
 
   const payload = await response.json();
   return payload.scenes || [];
+}
+
+async function fetchStatistics(source, field) {
+  const response = await fetch(config.statisticsUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      source,
+      field,
+      days: latestItemCount,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readApiError(response));
+  }
+
+  const payload = await response.json();
+  return payload.points || [];
 }
 
 async function loadItem(source, field, index, item) {
@@ -291,6 +368,205 @@ async function loadItem(source, field, index, item) {
     status.textContent = "Failed";
     stage.innerHTML = `<p class="placeholder">${escapeHtml(getFriendlyError(error))}</p>`;
   }
+}
+
+function renderChart() {
+  const source = elements.source.value;
+  const field = elements.field.value;
+  const sourceLabel = SOURCE_OPTIONS[source]?.label || "Selected source";
+  const fieldLabel = getFieldLabel(source, field);
+
+  if (items.length === 0) {
+    const emptyCard = document.createElement("article");
+    emptyCard.className = "moment-card moment-card--chart";
+    emptyCard.innerHTML = `
+      <div class="chart-card">
+        <div class="chart-header">
+          <div class="chart-title">
+            <strong>${escapeHtml(sourceLabel)} ${escapeHtml(fieldLabel)}</strong>
+            <span>No chartable values yet.</span>
+          </div>
+        </div>
+        <div class="chart-figure">
+          <p class="placeholder">Choose a source and field that expose numeric Copernicus bands.</p>
+        </div>
+      </div>
+    `;
+    elements.moments.appendChild(emptyCard);
+    return;
+  }
+
+  const values = items
+    .map((point) => (typeof point.mean === "number" && Number.isFinite(point.mean) ? point.mean : null))
+    .filter((value) => value !== null);
+
+  const numericValues = values.length > 0 ? values : [0];
+  const minValue = Math.min(...numericValues);
+  const maxValue = Math.max(...numericValues);
+  const span = maxValue - minValue || 1;
+  const width = 1100;
+  const height = 360;
+  const padding = { top: 28, right: 20, bottom: 74, left: 40 };
+  const innerWidth = width - padding.left - padding.right;
+  const innerHeight = height - padding.top - padding.bottom;
+  const barWidth = innerWidth / items.length;
+
+  const bars = items
+    .map((point, index) => {
+      const value = typeof point.mean === "number" && Number.isFinite(point.mean) ? point.mean : null;
+      const ratio = value === null ? 0 : (value - minValue) / span;
+      const barHeight = value === null ? 6 : Math.max(6, ratio * innerHeight);
+      const x = padding.left + index * barWidth + 10;
+      const y = padding.top + innerHeight - barHeight;
+      const barLabel = escapeHtml(point.date || `Day ${index + 1}`);
+      const displayValue = value === null ? "n/a" : formatChartValue(value);
+      const fill = value === null ? "rgba(15, 122, 138, 0.36)" : "#0f7a8a";
+      return `
+        <g>
+          <rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${Math.max(18, barWidth - 20).toFixed(2)}" height="${barHeight.toFixed(2)}" rx="6" fill="${fill}" />
+          <text x="${(x + (barWidth - 20) / 2).toFixed(2)}" y="${Math.max(24, y - 10).toFixed(2)}" text-anchor="middle" font-size="12" fill="var(--ink)" font-weight="700">${escapeHtml(displayValue)}</text>
+          <text x="${(x + (barWidth - 20) / 2).toFixed(2)}" y="${(height - 28).toFixed(2)}" text-anchor="middle" font-size="12" fill="var(--muted)">${barLabel}</text>
+        </g>
+      `;
+    })
+    .join("");
+
+  const points = items
+    .map((point) => {
+      const value = typeof point.mean === "number" && Number.isFinite(point.mean) ? point.mean : null;
+      return `
+        <div class="chart-legend-item">
+          <span>${escapeHtml(point.date || "Day")}</span>
+          <strong>${value === null ? "n/a" : escapeHtml(formatChartValue(value))}</strong>
+        </div>
+      `;
+    })
+    .join("");
+
+  const unitLabel = payloadUnitLabel(elements.view.value, source, field);
+
+  const card = document.createElement("article");
+  card.className = "moment-card moment-card--chart";
+  card.innerHTML = `
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">
+          <strong>${escapeHtml(sourceLabel)} ${escapeHtml(fieldLabel)}</strong>
+          <span>${escapeHtml(unitLabel)} over the latest ${items.length} days</span>
+        </div>
+        <div class="chart-title">
+          <strong>${escapeHtml(formatChartValue(minValue))} to ${escapeHtml(formatChartValue(maxValue))}</strong>
+          <span>Daily mean values from Copernicus statistics</span>
+        </div>
+      </div>
+      <svg class="chart-figure" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+    `${sourceLabel} ${fieldLabel} chart`
+  )}">
+        <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="transparent"></rect>
+        <line x1="${padding.left}" y1="${padding.top + innerHeight}" x2="${width - padding.right}" y2="${padding.top + innerHeight}" stroke="rgba(23,32,38,0.22)" />
+        ${bars}
+      </svg>
+      <div class="chart-legend">
+        ${points}
+      </div>
+    </div>
+  `;
+  elements.moments.appendChild(card);
+}
+
+function formatChartValue(value) {
+  const magnitude = Math.abs(value);
+
+  if (!Number.isFinite(value)) {
+    return "n/a";
+  }
+
+  if (magnitude >= 1000) {
+    return value.toFixed(0);
+  }
+
+  if (magnitude >= 100) {
+    return value.toFixed(1);
+  }
+
+  if (magnitude >= 1) {
+    return value.toFixed(2);
+  }
+
+  if (magnitude >= 0.01) {
+    return value.toFixed(3);
+  }
+
+  return value.toExponential(2);
+}
+
+function payloadUnitLabel(view, source, field) {
+  if (view !== "chart") {
+    return "";
+  }
+
+  if (source === "era5") {
+    return ERA5_FIELDS[field]?.unit || "units";
+  }
+
+  if (source === "sentinel3olci") {
+    return (
+      {
+        cloud_pressure_proxy: "reflectance",
+        humidity: "%",
+        sea_level_pressure: "hPa",
+        water_vapour: "kg/m^2",
+      }[field] || "units"
+    );
+  }
+
+  if (source === "sentinel5p") {
+    return (
+      {
+        cloud_fraction: "fraction",
+        cloud_optical_thickness: "a.u.",
+        cloud_top_height: "m",
+        cloud_top_pressure: "Pa",
+        no2: "mol/m^2",
+        o3: "mol/m^2",
+        co: "mol/m^2",
+        ch4: "ppb",
+        so2: "mol/m^2",
+        aerosol_index: "index",
+      }[field] || "units"
+    );
+  }
+
+  if (source === "sentinel2") {
+    return (
+      {
+        cloud_probability: "fraction",
+        cloud_mask: "fraction",
+      }[field] || "units"
+    );
+  }
+
+  return "units";
+}
+
+function supportsStatistics(source, field) {
+  if (source === "era5") {
+    return true;
+  }
+
+  if (source === "sentinel3olci") {
+    return true;
+  }
+
+  if (source === "sentinel5p") {
+    return true;
+  }
+
+  if (source === "sentinel2") {
+    return field === "cloud_probability" || field === "cloud_mask";
+  }
+
+  return false;
 }
 
 function getFieldLabel(source, field) {
