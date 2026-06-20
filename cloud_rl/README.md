@@ -2,7 +2,7 @@
 
 This repo is a zero-shot PyTorch scaffold for the second model: an RL planner that proposes cloud-mask edits and cloud properties from the current weather situation.
 
-It is intentionally built as a **pipeline and architecture prototype**. The reward is currently a dummy max-score reward, so the model will not learn meaningful meteorology yet. The point of this version is to verify that the data loader, batching, policy, action rasterization, reward interface, checkpointing, and evaluation outputs all work end-to-end.
+It is intentionally built as a **pipeline and architecture prototype**. The reward can come from a trained first-model temperature checkpoint, but you can still fall back to a dummy score for smoke tests. The point of this version is to verify that the data loader, batching, policy, action rasterization, reward interface, checkpointing, and evaluation outputs all work end-to-end.
 
 ## Design choices
 
@@ -165,6 +165,34 @@ This writes:
 
 The dataset will use that file automatically. If it is missing, fallback default means/stds are used.
 
+## Resume and reward checkpoint
+
+The RL trainer resumes from `policy_latest.pt` automatically when it exists. It
+can score actions with the deep first-model checkpoint only:
+
+```bash
+python train_rl.py \
+  --config configs/default.yaml \
+  --data-root ../dataset_out \
+  --split train \
+  --resume auto \
+  --reward-checkpoint /workspace/cloud_project/runs/cloud_temp_deep_480x300/best.pt
+```
+
+To use a local deep first-model run folder instead, pass:
+
+```bash
+python train_rl.py \
+  --config configs/default.yaml \
+  --data-root ../dataset_out \
+  --split train \
+  --resume auto \
+  --reward-checkpoint auto \
+  --reward-run-dir ../runs/cloud_temp
+```
+
+Use `--reward-checkpoint none` only when you explicitly want the dummy reward.
+
 ## Train with dummy reward
 
 ```bash
@@ -172,7 +200,9 @@ python train_rl.py \
   --config configs/default.yaml \
   --data-root ../dataset_out \
   --split train \
-  --out-dir ./runs/cloud_rl
+  --out-dir ./runs/cloud_rl \
+  --resume auto \
+  --reward-checkpoint none
 ```
 
 The dummy reward returns `1.0` for every action. This verifies the full PPO loop, but it does not create meaningful learning. For a smoke test where you want the policy to at least prefer smaller edits, use:
@@ -183,7 +213,42 @@ python train_rl.py \
   --data-root ../dataset_out \
   --split train \
   --out-dir ./runs/cloud_rl \
+  --resume auto \
+  --reward-checkpoint none \
   --dummy-budget-penalty 0.05
+```
+
+## Resume the first model
+
+The temperature model now resumes from `last.pt` automatically when it exists.
+Use the deep trainer for new runs and continued training:
+
+```bash
+python train_cloud_temp_deep_ddp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp_deep_480x300 --resume auto
+python train_cloud_temp_deep_ddp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp_deep_480x300 --resume none
+```
+
+The older lightweight trainer is kept for compatibility, but the RL reward path
+now expects deep checkpoints only.
+
+## Zip weights
+
+Bundle both model outputs into one zip:
+
+```bash
+python export_weights.py \
+  --first-model /workspace/cloud_project/runs/cloud_temp_deep_480x300 \
+  --rl-model ./runs/cloud_rl \
+  --out ./exports/model_weights.zip
+```
+
+If you only have the single checkpoint file from the first model, that works too:
+
+```bash
+python export_weights.py \
+  --first-model /workspace/cloud_project/runs/cloud_temp_deep_480x300/best.pt \
+  --rl-model ./runs/cloud_rl \
+  --out ./exports/model_weights.zip
 ```
 
 ## Evaluate / generate proposed masks
@@ -228,6 +293,20 @@ Replace this line in `train_rl.py`:
 ```python
 reward_fn = DummyMaxReward(max_score=1.0, optional_budget_penalty=args.dummy_budget_penalty).to(device)
 ```
+
+with the checkpoint-backed first-model reward:
+
+```python
+from cloud_rl.first_model_reward import CloudTempCheckpointReward
+
+reward_fn = CloudTempCheckpointReward(
+    "/workspace/cloud_project/runs/cloud_temp_deep_480x300/best.pt",
+).to(device)
+```
+
+The checkpoint reward uses the generated mask plus the raw feature vector and
+scores the policy by how close the first model thinks the resulting temperature
+is to the target temperature.
 
 with something like:
 

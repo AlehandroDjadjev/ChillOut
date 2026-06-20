@@ -441,6 +441,29 @@ def save_checkpoint(
     torch.save(payload, path)
 
 
+def resolve_resume_checkpoint(out_dir: Path, resume: str) -> Optional[Path]:
+    if resume in {"", "none", None}:
+        return None
+
+    if resume == "auto":
+        for candidate in [out_dir / "last.pt", out_dir / "best.pt"]:
+            if candidate.exists():
+                return candidate
+        return None
+
+    path = Path(resume)
+    if path.is_dir():
+        for candidate in [path / "last.pt", path / "best.pt"]:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(f"No last.pt or best.pt found under {path}")
+
+    if path.exists():
+        return path
+
+    raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+
+
 def train(args: argparse.Namespace) -> None:
     seed_everything(args.seed)
 
@@ -562,11 +585,42 @@ def train(args: argparse.Namespace) -> None:
 
     print(json.dumps(run_config, indent=2))
 
-    best_val_mae = float("inf")
+    resume_ckpt = resolve_resume_checkpoint(out_dir, args.resume)
     history = []
+    start_epoch = 1
+    best_val_mae = float("inf")
     bad_epochs = 0
 
-    for epoch in range(1, args.epochs + 1):
+    if (out_dir / "history.json").exists():
+        try:
+            history = json.loads((out_dir / "history.json").read_text(encoding="utf-8")).get("history", [])
+        except Exception:
+            history = []
+
+    if resume_ckpt is not None:
+        ckpt = torch.load(resume_ckpt, map_location=device)
+        model.load_state_dict(ckpt["model_state"])
+        if "optimizer_state" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state"])
+        start_epoch = int(ckpt.get("epoch", 0)) + 1
+        best_path = out_dir / "best.pt"
+        if best_path.exists():
+            try:
+                best_ckpt = torch.load(best_path, map_location="cpu")
+                best_val_mae = float(best_ckpt.get("metrics", {}).get("val", {}).get("mae_c", best_val_mae))
+            except Exception:
+                pass
+        else:
+            best_val_mae = float(ckpt.get("metrics", {}).get("val", {}).get("mae_c", best_val_mae))
+        print(f"Resumed first-model training from {resume_ckpt} at epoch {start_epoch}.")
+    else:
+        print("Starting first-model training from scratch.")
+
+    if start_epoch > args.epochs:
+        print(f"Checkpoint already reached epoch {start_epoch - 1}, which is beyond the configured total {args.epochs}.")
+        return
+
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
 
         train_loss_sum = 0.0
@@ -709,6 +763,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad-clip", type=float, default=1.0)
     parser.add_argument("--early-stop-patience", type=int, default=15)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume", default="auto", help="Resume from last.pt, best.pt, a checkpoint path, or none.")
 
     return parser.parse_args()
 

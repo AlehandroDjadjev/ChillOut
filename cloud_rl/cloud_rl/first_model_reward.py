@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from .dataset import FEATURE_KEYS
+from .rewards import AbstractRewardModel
+
+
+ANGLE_FEATURE_NAMES = {"wind_direction_10m_dominant"}
+
+
+def resolve_first_model_checkpoint(source: str | Path, prefer_best: bool = True) -> Path:
+    path = Path(source)
+
+    if path.is_file():
+        return path
+
+    if not path.exists():
+        raise FileNotFoundError(f"First-model checkpoint path not found: {path}")
+
+    candidates = ["best.pt", "last.pt"] if prefer_best else ["last.pt", "best.pt"]
+    for name in candidates:
+        candidate = path / name
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(f"Could not find best.pt or last.pt under {path}")
+
+
+def _transform_raw_features(raw_features: torch.Tensor, raw_feature_names: Sequence[str]) -> torch.Tensor:
+    columns: List[torch.Tensor] = []
+    for index, name in enumerate(raw_feature_names):
+        column = raw_features[:, index]
+        if name in ANGLE_FEATURE_NAMES:
+            radians = column * math.pi / 180.0
+            columns.append(torch.sin(radians).unsqueeze(1))
+            columns.append(torch.cos(radians).unsqueeze(1))
+        else:
+            columns.append(column.unsqueeze(1))
+    return torch.cat(columns, dim=1)
+
+
+def _align_by_names(
+    raw_features: torch.Tensor,
+    source_names: Sequence[str],
+    target_names: Sequence[str],
+) -> torch.Tensor:
+    index_by_name = {name: idx for idx, name in enumerate(source_names)}
+    columns: List[torch.Tensor] = []
+    for name in target_names:
+        index = index_by_name.get(name)
+        if index is None:
+            columns.append(torch.zeros((raw_features.shape[0], 1), dtype=raw_features.dtype, device=raw_features.device))
+        else:
+            columns.append(raw_features[:, index : index + 1])
+    return torch.cat(columns, dim=1)
+
+
+class ResBlock(nn.Module):
+    def __init__(self, channels: int, dropout: float):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.SiLU(inplace=True),
+            nn.Dropout2d(dropout),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+        self.act = nn.SiLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.act(x + self.net(x))
+
+
+class DownStage(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, blocks: int, dropout: float):
+        super().__init__()
+        layers = [
+            nn.Conv2d(in_ch, out_ch, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.SiLU(inplace=True),
+        ]
+        for _ in range(blocks):
+            layers.append(ResBlock(out_ch, dropout))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class DeepCloudCNN(nn.Module):
+    def __init__(self, embedding_dim: int = 512):
+        super().__init__()
+        self.net = nn.Sequential(
+            DownStage(1, 48, blocks=2, dropout=0.02),
+            DownStage(48, 96, blocks=2, dropout=0.03),
+            DownStage(96, 192, blocks=3, dropout=0.04),
+            DownStage(192, 384, blocks=3, dropout=0.05),
+            DownStage(384, 512, blocks=2, dropout=0.05),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(512, embedding_dim),
+            nn.LayerNorm(embedding_dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class DeepTabularMLP(nn.Module):
+    def __init__(self, num_features: int, embedding_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(num_features, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.10),
+
+            nn.Linear(256, 384),
+            nn.LayerNorm(384),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.10),
+
+            nn.Linear(384, 384),
+            nn.LayerNorm(384),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.10),
+
+            nn.Linear(384, embedding_dim),
+            nn.LayerNorm(embedding_dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class CloudTempDeepModel(nn.Module):
+    def __init__(self, num_features: int):
+        super().__init__()
+        self.image_encoder = DeepCloudCNN(embedding_dim=512)
+        self.tabular_encoder = DeepTabularMLP(num_features=num_features, embedding_dim=256)
+        self.head = nn.Sequential(
+            nn.Linear(512 + 256, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.20),
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.15),
+            nn.Linear(256, 128),
+            nn.LayerNorm(128),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.10),
+            nn.Linear(128, 64),
+            nn.SiLU(inplace=True),
+            nn.Linear(64, 1),
+        )
+
+    def forward(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
+        image_emb = self.image_encoder(mask)
+        tab_emb = self.tabular_encoder(features)
+        return self.head(torch.cat([image_emb, tab_emb], dim=1))
+
+
+def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    if not any(key.startswith("module.") for key in state):
+        return state
+    return {key.removeprefix("module."): value for key, value in state.items()}
+
+
+class CloudTempCheckpointReward(AbstractRewardModel):
+    """Reward model backed by a saved CloudTempModel checkpoint.
+
+    The checkpoint is the "first model" trained on the cloud masks + weather
+    features. The reward is higher when the checkpoint predicts a temperature
+    closer to the target temperature.
+    """
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path,
+        reward_scale_c: float = 5.0,
+        optional_budget_penalty: float = 0.0,
+        prefer_best: bool = True,
+    ) -> None:
+        super().__init__()
+        resolved = resolve_first_model_checkpoint(checkpoint_path, prefer_best=prefer_best)
+        ckpt = torch.load(resolved, map_location="cpu")
+
+        self.checkpoint_path = str(resolved)
+        self.reward_scale_c = float(reward_scale_c)
+        self.optional_budget_penalty = float(optional_budget_penalty)
+        self.raw_feature_names = list(ckpt["raw_feature_names"])
+        self.model_feature_names = list(ckpt["model_feature_names"])
+        self.image_height = int(ckpt["image_height"])
+        self.image_width = int(ckpt["image_width"])
+
+        normalizer = ckpt["normalizer"]
+        feature_mean = torch.tensor(normalizer["mean"], dtype=torch.float32)
+        feature_std = torch.tensor(normalizer["std"], dtype=torch.float32)
+        feature_std = torch.where(feature_std.abs() < 1e-6, torch.ones_like(feature_std), feature_std)
+        self.register_buffer("feature_mean", feature_mean)
+        self.register_buffer("feature_std", feature_std)
+
+        state = _strip_module_prefix(ckpt["model_state"])
+        self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
+        self.model.load_state_dict(state)
+        self.model.eval()
+        for param in self.model.parameters():
+            param.requires_grad_(False)
+
+    def _resolve_feature_names(self, raw_feature_count: int) -> Sequence[str]:
+        if raw_feature_count == len(self.raw_feature_names):
+            return self.raw_feature_names
+        if raw_feature_count == len(FEATURE_KEYS):
+            return FEATURE_KEYS
+        if raw_feature_count == len(self.model_feature_names):
+            return self.model_feature_names
+        raise ValueError(
+            "Feature vector width does not match the checkpoint metadata or the canonical dataset schema: "
+            f"got {raw_feature_count}, raw_feature_names={len(self.raw_feature_names)}, "
+            f"feature_keys={len(FEATURE_KEYS)}, model_feature_names={len(self.model_feature_names)}."
+        )
+
+    def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
+        raw = feature_vector.float()
+        source_names = self._resolve_feature_names(raw.shape[1])
+        if raw.shape[1] == len(self.model_feature_names):
+            processed = raw
+        else:
+            aligned = _align_by_names(raw, source_names, self.raw_feature_names)
+            processed = _transform_raw_features(aligned, self.raw_feature_names)
+
+        expected_dim = self.feature_mean.shape[0]
+        if processed.shape[1] < expected_dim:
+            processed = F.pad(processed, (0, expected_dim - processed.shape[1]))
+        elif processed.shape[1] > expected_dim:
+            processed = processed[:, :expected_dim]
+        return (processed - self.feature_mean) / self.feature_std
+
+    def _prepare_mask(self, mask: torch.Tensor) -> torch.Tensor:
+        if mask.shape[-2:] == (self.image_height, self.image_width):
+            return mask.float()
+        return F.interpolate(
+            mask.float(),
+            size=(self.image_height, self.image_width),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+    def forward(
+        self,
+        original_mask: torch.Tensor,
+        generated_mask: torch.Tensor,
+        feature_vector: torch.Tensor,
+        target_temperature: torch.Tensor,
+        property_maps: torch.Tensor,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        mask = self._prepare_mask(generated_mask)
+        features = self._prepare_features(feature_vector)
+
+        with torch.no_grad():
+            predicted_temperature = self.model(mask, features)
+
+        temp_error = (predicted_temperature - target_temperature.float()).abs()
+        reward = torch.exp(-temp_error / max(1e-6, self.reward_scale_c))
+
+        if self.optional_budget_penalty > 0:
+            change_cost = (generated_mask - original_mask).abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
+            prop_cost = property_maps.abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
+            reward = reward - self.optional_budget_penalty * (change_cost + prop_cost)
+
+        return reward, {
+            "predicted_temperature_c": predicted_temperature.detach(),
+            "temp_error_c": temp_error.detach(),
+        }
