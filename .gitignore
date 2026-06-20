@@ -3,3 +3,10 @@ config.js
 .DS_Store
 Thumbs.db
 dataset.out/*
+node_modules/
+.*
+!.gitignore
+
+# Python (worker)
+__pycache__/
+*.pyc
