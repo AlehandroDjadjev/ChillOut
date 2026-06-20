@@ -21,6 +21,9 @@ from tqdm import tqdm
 from cloud_rl.actions import rasterize_actions
 =======
 from cloud_rl.actions import CREATE, NOOP, REMOVE, rasterize_actions
+<<<<<<< HEAD
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+=======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 from cloud_rl.dataset import CloudFolderDataset, collate_cloud_batch, compute_stats
 from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first_model_checkpoint
@@ -61,7 +64,10 @@ def noop_actions(batch_size: int, max_actions: int, device: torch.device) -> Dic
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 def call_reward(reward_fn, batch: Dict[str, torch.Tensor], generated_mask: torch.Tensor, property_maps: torch.Tensor):
     return reward_fn(
         batch["original_mask"],
@@ -76,6 +82,9 @@ def call_reward(reward_fn, batch: Dict[str, torch.Tensor], generated_mask: torch
     )
 
 
+<<<<<<< HEAD
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+=======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 def resolve_rl_resume_checkpoint(source: str, out_dir: Path) -> Path | None:
     if source in {"", "none", None}:

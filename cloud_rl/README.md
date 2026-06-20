@@ -276,7 +276,10 @@ eval_outputs/
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 =======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 ## Diagnose RL behavior
@@ -304,7 +307,10 @@ This prints and saves:
 The output file is `./rl_diagnostics/rl_diagnostics.json`.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> a9ab4c8aa146ced4d7e82627c2b155b681f8f9fa
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 =======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 ## How to plug in the future ConvLSTM reward model

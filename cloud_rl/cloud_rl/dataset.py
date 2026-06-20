@@ -348,13 +348,19 @@ class CloudFolderDataset(Dataset):
         self.feature_std = np.where(self.feature_std < 1e-6, 1.0, self.feature_std)
         self.target_std = max(self.target_std, 1e-6)
 <<<<<<< HEAD
+<<<<<<< HEAD
         self.feature_dim = len(self.feature_keys)
 =======
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         # Policy state includes the latest normalized raw feature vector plus the
         # v6 trend sequence, current-temp anchor, and target offset. The reward
         # still receives raw feature tensors separately.
         self.policy_feature_dim = len(self.feature_keys) + self.lookback * 4 + 2
         self.feature_dim = self.policy_feature_dim
+<<<<<<< HEAD
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+=======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
     def __len__(self) -> int:
@@ -373,10 +379,13 @@ class CloudFolderDataset(Dataset):
             raw_sequence.append(raw)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
         raw_features = extract_feature_vector(sample, self.feature_keys)
         raw_features = np.nan_to_num(raw_features, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         norm_features = (raw_features - self.feature_mean) / self.feature_std
 =======
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         raw_features = raw_sequence[-1]
         raw_feature_sequence = np.stack(raw_sequence, axis=0).astype(np.float32)
         norm_sequence = (raw_feature_sequence - self.feature_mean) / self.feature_std
@@ -385,6 +394,9 @@ class CloudFolderDataset(Dataset):
         if trend.shape[0] != self.lookback:
             pad = np.repeat(trend[:1], self.lookback - trend.shape[0], axis=0)
             trend = np.concatenate([pad, trend], axis=0)
+<<<<<<< HEAD
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+=======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
         target = float(sample.get("target_temperature_c", sample.get("target", 20.0)))

@@ -324,7 +324,10 @@ def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tens
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 def _strip_compile_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if not any(key.startswith("_orig_mod.") for key in state):
         return state
@@ -348,6 +351,9 @@ def _load_v6_model_class():
     return module.ResidualTrendSplitConvLSTM
 
 
+<<<<<<< HEAD
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+=======
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 class CloudTempCheckpointReward(AbstractRewardModel):
     """Reward model backed by a saved CloudTempModel checkpoint.
@@ -563,10 +569,14 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         )
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     def _predict_temperature(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
         if self.model_kind == "deep":
             return self.model(mask, features)
 
+=======
+    def _split_cloud_world(self, normalized_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 =======
     def _split_cloud_world(self, normalized_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 >>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
