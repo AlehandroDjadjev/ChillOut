@@ -3,8 +3,14 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 from pathlib import Path
 from typing import Dict, List
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 
 import torch
 import torch.backends.cudnn as cudnn
@@ -128,6 +134,8 @@ def main() -> None:
         cfg["out_dir"] = args.out_dir
 
     seed_everything(int(cfg.get("seed", 42)))
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
     if device.type == "cuda":
@@ -146,7 +154,7 @@ def main() -> None:
         print(f"Wrote stats to {data_root / 'stats.json'}")
 
     image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
-    num_workers = int(cfg.get("num_workers", 0))
+    num_workers = max(0, min(int(cfg.get("num_workers", 0)), 1))
     dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
     loader_kwargs = {
         "dataset": dataset,
