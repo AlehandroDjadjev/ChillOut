@@ -107,23 +107,25 @@ def main() -> None:
         absolute_error_weight=args.reward_absolute_error_weight,
     ).to(device)
 
+    data_root = resolve_existing_path(cfg["data_root"])
+    image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
+    dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
+    feature_dim = int(dataset.feature_dim)
+
     policy_model: Optional[CloudActorCritic] = None
     if args.policy_checkpoint:
         policy_path = resolve_existing_path(args.policy_checkpoint)
         policy_state = torch.load(policy_path, map_location="cpu")
+        policy_cfg = policy_state.get("cfg", cfg)
         policy_model = CloudActorCritic(
-            obs_channels=1 + 14 + 1,
-            feature_dim=14,
-            max_actions=int(cfg["policy"]["max_actions"]),
-            hidden_dim=int(cfg["policy"]["hidden_dim"]),
+            obs_channels=1 + feature_dim + 1,
+            feature_dim=feature_dim,
+            max_actions=int(policy_cfg["policy"]["max_actions"]),
+            hidden_dim=int(policy_cfg["policy"]["hidden_dim"]),
         ).to(device)
         policy_model.load_state_dict(policy_state["model"])
         policy_model.eval()
         print(f"Loaded policy checkpoint: {policy_path}")
-
-    data_root = resolve_existing_path(cfg["data_root"])
-    image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
-    dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
     loader = DataLoader(
         dataset,
         batch_size=int(cfg["batch_size"]),

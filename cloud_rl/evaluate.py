@@ -56,11 +56,12 @@ def main() -> None:
         image_size=(int(cfg["image_height"]), int(cfg["image_width"])),
         split=args.split,
     )
+    feature_dim = int(dataset.feature_dim)
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_cloud_batch)
 
     model = CloudActorCritic(
-        obs_channels=16,
-        feature_dim=14,
+        obs_channels=1 + feature_dim + 1,
+        feature_dim=feature_dim,
         max_actions=int(cfg["policy"]["max_actions"]),
         hidden_dim=int(cfg["policy"]["hidden_dim"]),
     ).to(device)

@@ -83,6 +83,25 @@ def resolve_rl_resume_checkpoint(source: str, out_dir: Path) -> Path | None:
     raise FileNotFoundError(f"Resume checkpoint not found: {path}")
 
 
+def resolve_auto_reward_source(source: str) -> Path:
+    if source not in {"", "auto"}:
+        return resolve_existing_path(source)
+    candidates = [
+        "runs/cloud_temp_interaction",
+        "runs/cloud_temp_deep_480x300",
+        "runs/cloud_temp",
+    ]
+    for candidate in candidates:
+        try:
+            return resolve_existing_path(candidate)
+        except FileNotFoundError:
+            continue
+    raise FileNotFoundError(
+        "Could not find an automatic first-model reward run. "
+        "Expected one of runs/cloud_temp_interaction, runs/cloud_temp_deep_480x300, or runs/cloud_temp."
+    )
+
+
 def load_history_tail(out_dir: Path) -> List[Dict]:
     history_path = out_dir / "history.tail.json"
     if not history_path.exists():
@@ -244,7 +263,7 @@ def main() -> None:
         default="auto",
         help="First-model checkpoint path, reward run dir, auto, or none for the dummy reward.",
     )
-    parser.add_argument("--reward-run-dir", default="runs/cloud_temp", help="Directory used when reward-checkpoint=auto.")
+    parser.add_argument("--reward-run-dir", default="auto", help="Directory used when reward-checkpoint=auto.")
     parser.add_argument("--reward-scale", type=float, default=5.0, help="Temperature error scale for the first-model reward.")
     parser.add_argument("--reward-improvement-gain", type=float, default=100.0)
     parser.add_argument("--reward-absolute-error-weight", type=float, default=0.0)
@@ -297,11 +316,12 @@ def main() -> None:
     loader = DataLoader(**loader_kwargs)
     loader_iter = infinite_loader(loader)
 
-    obs_channels = 1 + 14 + 1
+    feature_dim = int(dataset.feature_dim)
+    obs_channels = 1 + feature_dim + 1
     pcfg = cfg["policy"]
     model = CloudActorCritic(
         obs_channels=obs_channels,
-        feature_dim=14,
+        feature_dim=feature_dim,
         max_actions=int(pcfg["max_actions"]),
         hidden_dim=int(pcfg["hidden_dim"]),
     ).to(device)
@@ -316,7 +336,7 @@ def main() -> None:
     else:
         reward_source = args.reward_checkpoint
         if reward_source == "auto":
-            reward_source = str(resolve_existing_path(args.reward_run_dir))
+            reward_source = str(resolve_auto_reward_source(args.reward_run_dir))
         reward_ckpt = resolve_first_model_checkpoint(reward_source, prefer_best=True)
         reward_fn = CloudTempCheckpointReward(
             reward_ckpt,

@@ -35,6 +35,11 @@ DEFAULT_FEATURE_STD = np.array(
     dtype=np.float32,
 )
 
+DEFAULT_FEATURE_STATS = {
+    name: (float(mean), float(std))
+    for name, mean, std in zip(FEATURE_KEYS, DEFAULT_FEATURE_MEAN, DEFAULT_FEATURE_STD)
+}
+
 SKIP_JSON_NAMES = {
     "stats.json",
     "metadata.json",
@@ -123,6 +128,26 @@ def load_binary_mask(path: Path, size_hw: Tuple[int, int]) -> torch.Tensor:
     return torch.from_numpy(arr)[None, :, :]
 
 
+def load_feature_keys(data_root: Path) -> List[str]:
+    metadata_path = data_root / "metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        for key in ("raw_feature_names", "feature_keys", "model_feature_names"):
+            names = metadata.get(key)
+            if names:
+                return list(names)
+    return list(FEATURE_KEYS)
+
+
+def default_stats_for_keys(feature_keys: Sequence[str]) -> Tuple[np.ndarray, np.ndarray]:
+    means, stds = [], []
+    for name in feature_keys:
+        mean, std = DEFAULT_FEATURE_STATS.get(name, (0.0, 1.0))
+        means.append(mean)
+        stds.append(std)
+    return np.asarray(means, dtype=np.float32), np.asarray(stds, dtype=np.float32)
+
+
 def extract_feature_vector(sample: Dict, feature_keys: Sequence[str] = FEATURE_KEYS) -> np.ndarray:
     if "feature_vector" in sample and len(sample["feature_vector"]) == len(feature_keys):
         return np.asarray(sample["feature_vector"], dtype=np.float32)
@@ -132,11 +157,12 @@ def extract_feature_vector(sample: Dict, feature_keys: Sequence[str] = FEATURE_K
 
 def compute_stats(
     data_root: str | Path,
-    feature_keys: Sequence[str] = FEATURE_KEYS,
+    feature_keys: Optional[Sequence[str]] = None,
     split: Optional[str] = "train",
     manifest_path: Optional[str | Path] = None,
 ) -> Dict[str, List[float]]:
     root = Path(data_root)
+    resolved_feature_keys = list(feature_keys) if feature_keys is not None else load_feature_keys(root)
     source = discover_sample_sources(root, split=split, manifest_path=Path(manifest_path) if manifest_path else None)
     samples = []
     for item in source:
@@ -144,13 +170,13 @@ def compute_stats(
 
     xs, ts = [], []
     for sample in samples:
-        x = extract_feature_vector(sample, feature_keys)
+        x = extract_feature_vector(sample, resolved_feature_keys)
         if np.isfinite(x).all():
             xs.append(x)
         ts.append(float(sample.get("target_temperature_c", 20.0)))
 
     if not xs:
-        mean, std = DEFAULT_FEATURE_MEAN, DEFAULT_FEATURE_STD
+        mean, std = default_stats_for_keys(resolved_feature_keys)
     else:
         mat = np.stack(xs).astype(np.float32)
         mean = mat.mean(axis=0)
@@ -159,7 +185,7 @@ def compute_stats(
 
     t = np.asarray(ts, dtype=np.float32)
     return {
-        "feature_keys": list(feature_keys),
+        "feature_keys": list(resolved_feature_keys),
         "feature_mean": mean.tolist(),
         "feature_std": std.tolist(),
         "target_temp_mean": [float(t.mean()) if len(t) else 20.0],
@@ -189,6 +215,7 @@ class CloudFolderDataset(Dataset):
         self.data_root = Path(data_root)
         self.image_size = image_size
         self.include_feature_planes = include_feature_planes
+        self.feature_keys = load_feature_keys(self.data_root)
         self.manifest_sources = discover_sample_sources(
             self.data_root,
             split=split,
@@ -208,11 +235,16 @@ class CloudFolderDataset(Dataset):
             stats = json.loads((self.data_root / "stats.json").read_text(encoding="utf-8"))
 
         if stats is None:
-            self.feature_mean = DEFAULT_FEATURE_MEAN
-            self.feature_std = DEFAULT_FEATURE_STD
+            self.feature_mean, self.feature_std = default_stats_for_keys(self.feature_keys)
             self.target_mean = 20.0
             self.target_std = 10.0
         else:
+            stats_feature_keys = list(stats.get("feature_keys") or self.feature_keys)
+            if stats_feature_keys != self.feature_keys:
+                raise ValueError(
+                    "stats.json feature_keys do not match dataset metadata feature names. "
+                    "Regenerate stats with train_rl.py --write-stats for this dataset."
+                )
             self.feature_mean = np.asarray(stats["feature_mean"], dtype=np.float32)
             self.feature_std = np.asarray(stats["feature_std"], dtype=np.float32)
             self.target_mean = float(stats["target_temp_mean"][0])
@@ -220,6 +252,7 @@ class CloudFolderDataset(Dataset):
 
         self.feature_std = np.where(self.feature_std < 1e-6, 1.0, self.feature_std)
         self.target_std = max(self.target_std, 1e-6)
+        self.feature_dim = len(self.feature_keys)
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -229,7 +262,7 @@ class CloudFolderDataset(Dataset):
         mask_path = resolve_mask_path(self.data_root, source, sample["mask_path"])
         mask = load_binary_mask(mask_path, self.image_size)
 
-        raw_features = extract_feature_vector(sample)
+        raw_features = extract_feature_vector(sample, self.feature_keys)
         raw_features = np.nan_to_num(raw_features, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
         norm_features = (raw_features - self.feature_mean) / self.feature_std
 
