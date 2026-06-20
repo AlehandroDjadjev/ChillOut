@@ -1,0 +1,71 @@
+seed: 1337
+
+data:
+  x_series: data/processed_cloudforce/x_series.npy
+  y_series: data/processed_cloudforce/y_series.npy
+  train_index: data/processed_cloudforce/train_windows.csv
+  val_index: data/processed_cloudforce/val_windows.csv
+  test_index: data/processed_cloudforce/test_windows.csv
+
+window:
+  input_len: 4
+  horizon: 1
+  target_mode: mean
+
+model:
+  input_channels: 12
+  output_channels: 2
+  encoder_channels: 32
+  hidden_channels: 32
+  kernel_size: 3
+  dropout: 0.12
+  global_pool_output: true
+
+training:
+  batch_size: 4
+  epochs: 120
+  learning_rate: 0.0008
+  weight_decay: 0.0003
+  grad_clip: 1.0
+  num_workers: 0
+  device: auto
+  amp: true
+  accumulation_steps: 1
+  patience: 18
+  checkpoint_path: checkpoints/best_cloudforce.pt
+  last_checkpoint_path: checkpoints/last_cloudforce.pt
+
+# Bias the task toward cloud effects. The shortwave attenuation target is the
+# primary target; temperature anomaly is secondary and should not dominate.
+loss:
+  type: smooth_l1
+  channel_weights: [2.0, 0.5]
+
+# Training-time shortcut control. Some batches/auxiliary passes remove non-cloud
+# channels so the model cannot survive purely on weather scalar shortcuts.
+cloud_focus:
+  enabled: true
+  noncloud_sample_dropout_prob: 0.35
+  noncloud_channel_dropout_prob: 0.10
+  cloud_only_aux_weight: 0.35
+
+channels:
+  input:
+    - s2_cloud_mask_scl
+    - s2_cloud_white
+    - s2_cloud_prob_CLP
+    - s2_cirrus_flag
+    - s2_high_cloud_flag
+    - s2_medium_cloud_flag
+    - s2_aerosol_AOT
+    - era5_surface_solar_radiation_downwards_clear_sky
+    - era5_2m_dewpoint_temperature
+    - era5_total_column_water_vapour
+    - era5_surface_pressure
+    - era5_wind_speed_10m
+  target:
+    - shortwave_cloud_attenuation_next_5day
+    - temperature_anomaly_next_5day
+
+ablation:
+  cloud_channel_indices: [0, 1, 2, 3, 4, 5, 6]
