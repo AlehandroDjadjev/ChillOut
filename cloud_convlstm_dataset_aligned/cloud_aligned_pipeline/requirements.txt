@@ -1,0 +1,16 @@
+torch>=2.1
+numpy
+tqdm
+pyyaml
+xarray
+netCDF4
+zarr
+matplotlib
+pandas
+requests
+sentinelhub
+cdsapi
+pyproj
+python-dateutil
+tifffile
+pillow

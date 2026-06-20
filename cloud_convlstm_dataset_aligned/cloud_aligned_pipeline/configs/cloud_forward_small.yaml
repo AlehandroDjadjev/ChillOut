@@ -1,0 +1,71 @@
+seed: 1337
+
+data:
+  train_x: data/processed/train_x.npy
+  train_y: data/processed/train_y.npy
+  val_x: data/processed/val_x.npy
+  val_y: data/processed/val_y.npy
+  test_x: data/processed/test_x.npy
+  test_y: data/processed/test_y.npy
+
+window:
+  input_len: 40
+  horizon: 8
+  target_mode: mean
+
+model:
+  input_channels: 20
+  output_channels: 4
+  encoder_channels: 32
+  hidden_channels: 24
+  kernel_size: 3
+  dropout: 0.05
+
+training:
+  batch_size: 2
+  epochs: 40
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  grad_clip: 1.0
+  num_workers: 2
+  device: auto
+  amp: true
+  accumulation_steps: 1
+  patience: 8
+  checkpoint_path: checkpoints/best.pt
+  last_checkpoint_path: checkpoints/last.pt
+
+loss:
+  type: smooth_l1
+  channel_weights: [1.0, 1.0, 1.0, 0.7]
+
+channels:
+  input:
+    - cloud_mask_or_fraction
+    - low_cloud_cover
+    - mid_cloud_cover
+    - high_cloud_cover
+    - cloud_liquid_water
+    - cloud_ice_water
+    - cloud_optical_or_brightness_proxy
+    - cloud_top_height_or_pressure_proxy
+    - surface_shortwave_down
+    - surface_shortwave_clear_sky
+    - surface_longwave_down
+    - surface_longwave_clear_sky
+    - surface_net_shortwave
+    - surface_net_longwave
+    - temperature_anomaly
+    - dewpoint_or_relative_humidity
+    - total_column_water_vapour
+    - surface_pressure
+    - precipitation
+    - wind_u_or_speed
+  target:
+    - shortwave_anomaly_next_24h
+    - longwave_anomaly_next_24h
+    - net_radiation_anomaly_next_24h
+    - temperature_anomaly_next_24h
+
+ablation:
+  cloud_channel_indices: [0, 1, 2, 3, 4, 5, 6, 7]
