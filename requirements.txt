@@ -3,3 +3,8 @@ torchvision
 pillow
 numpy
 tqdm
+requests
+python-dateutil
+pyproj
+sentinelhub
+scikit-learn
