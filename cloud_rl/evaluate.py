@@ -55,6 +55,8 @@ def main() -> None:
         data_root,
         image_size=(int(cfg["image_height"]), int(cfg["image_width"])),
         split=args.split,
+        lookback=int(cfg.get("lookback", 4)),
+        max_gap_days=float(cfg.get("max_gap_days", 12.0)),
     )
     feature_dim = int(dataset.feature_dim)
     loader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_cloud_batch)
@@ -90,7 +92,15 @@ def main() -> None:
                 sampled = model.deterministic(batch["obs_map"], batch["features"], batch["target_temp_norm"])
             rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
             reward, info = reward_fn(
-                batch["original_mask"], rast["generated_mask"], batch["raw_features"], batch["target_temp"], rast["property_maps"]
+                batch["original_mask"],
+                rast["generated_mask"],
+                batch["raw_features"],
+                batch["target_temp"],
+                rast["property_maps"],
+                original_mask_sequence=batch.get("original_mask_sequence"),
+                raw_feature_sequence=batch.get("raw_feature_sequence"),
+                trend_features=batch.get("trend_features"),
+                current_temperature=batch.get("current_temp"),
             )
             sid = batch["sample_id"][0]
             save_mask(batch["original_mask"][0, 0], out_dir / f"{sid}_original.png")

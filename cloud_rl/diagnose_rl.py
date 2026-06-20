@@ -109,7 +109,13 @@ def main() -> None:
 
     data_root = resolve_existing_path(cfg["data_root"])
     image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
-    dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
+    dataset = CloudFolderDataset(
+        data_root,
+        image_size=image_size,
+        split=args.split,
+        lookback=int(cfg.get("lookback", 4)),
+        max_gap_days=float(cfg.get("max_gap_days", 12.0)),
+    )
     feature_dim = int(dataset.feature_dim)
 
     policy_model: Optional[CloudActorCritic] = None
@@ -168,6 +174,10 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 noop_rast["property_maps"],
+                original_mask_sequence=batch.get("original_mask_sequence"),
+                raw_feature_sequence=batch.get("raw_feature_sequence"),
+                trend_features=batch.get("trend_features"),
+                current_temperature=batch.get("current_temp"),
             )
             random_reward, random_info = reward_fn(
                 batch["original_mask"],
@@ -175,6 +185,10 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 random_rast["property_maps"],
+                original_mask_sequence=batch.get("original_mask_sequence"),
+                raw_feature_sequence=batch.get("raw_feature_sequence"),
+                trend_features=batch.get("trend_features"),
+                current_temperature=batch.get("current_temp"),
             )
             create_reward, create_info = reward_fn(
                 batch["original_mask"],
@@ -182,6 +196,10 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 create_rast["property_maps"],
+                original_mask_sequence=batch.get("original_mask_sequence"),
+                raw_feature_sequence=batch.get("raw_feature_sequence"),
+                trend_features=batch.get("trend_features"),
+                current_temperature=batch.get("current_temp"),
             )
             remove_reward, remove_info = reward_fn(
                 batch["original_mask"],
@@ -189,6 +207,10 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 remove_rast["property_maps"],
+                original_mask_sequence=batch.get("original_mask_sequence"),
+                raw_feature_sequence=batch.get("raw_feature_sequence"),
+                trend_features=batch.get("trend_features"),
+                current_temperature=batch.get("current_temp"),
             )
 
             policy_reward = None
@@ -210,6 +232,10 @@ def main() -> None:
                     batch["raw_features"],
                     batch["target_temp"],
                     policy_rast["property_maps"],
+                    original_mask_sequence=batch.get("original_mask_sequence"),
+                    raw_feature_sequence=batch.get("raw_feature_sequence"),
+                    trend_features=batch.get("trend_features"),
+                    current_temperature=batch.get("current_temp"),
                 )
                 policy_change = (policy_rast["generated_mask"] - batch["original_mask"]).abs().mean(dim=(1, 2, 3))
                 policy_temp_err = policy_info["temp_error_c"]

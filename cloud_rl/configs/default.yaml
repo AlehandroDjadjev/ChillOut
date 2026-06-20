@@ -1,9 +1,11 @@
-data_root: dataset_cloudforce_interaction
+data_root: dataset_cloudforce_radiation_v6
 out_dir: ./runs/cloud_rl
 image_height: 256
 image_width: 256
 batch_size: 16
 num_workers: 0
+lookback: 4
+max_gap_days: 12.0
 seed: 42
 
 policy:
