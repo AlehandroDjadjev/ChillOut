@@ -2,3 +2,4 @@ config.js
 .env
 .DS_Store
 Thumbs.db
+dataset.out/*
