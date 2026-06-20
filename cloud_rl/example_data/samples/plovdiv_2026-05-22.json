@@ -1,0 +1,35 @@
+{
+  "sample_id": "plovdiv_2026-05-22",
+  "city": "Plovdiv",
+  "country": "Bulgaria",
+  "lat": 42.1354,
+  "lon": 24.7453,
+  "bbox": [24.503024, 41.955738, 24.987576, 42.315062],
+  "date": "2026-05-22",
+  "anchor": "2026-05-22T00:00:00Z",
+  "mask_path": "masks/plovdiv/2026-05-22.png",
+  "target_temperature_c": 17.7,
+  "inputs": {
+    "s5p_cloud_fraction": 0.9991144235546501,
+    "s5p_cloud_optical_thickness": 21.663321036514198,
+    "s5p_cloud_top_height_m": 3502.8076109427384,
+    "s5p_cloud_top_pressure_pa": 67212.52386571256,
+    "s5p_aerosol_index": -0.7879521908557585,
+    "s3_humidity_pct": 78.04129079614681,
+    "s3_sea_level_pressure_hpa": 1017.2369269414212,
+    "s3_water_vapour_kg_m2": 27.387342003539676,
+    "wind_speed_10m_mean": 17.0,
+    "wind_direction_10m_dominant": 255.0,
+    "shortwave_radiation_sum": 12.39,
+    "precipitation_sum": 7.1,
+    "cloud_cover_mean": 76.0,
+    "surface_pressure_mean": 997.5
+  },
+  "feature_vector": [0.9991144235546501, 21.663321036514198, 3502.8076109427384, 67212.52386571256, -0.7879521908557585, 78.04129079614681, 1017.2369269414212, 27.387342003539676, 17.0, 255.0, 12.39, 7.1, 76.0, 997.5],
+  "source_notes": {
+    "mask": "Sentinel-2 cloud mask",
+    "satellite_stats": "Sentinel-5P + Sentinel-3 OLCI daily statistics",
+    "weather": "Open-Meteo daily weather (ERA5-based)",
+    "radiation_note": "shortwave_radiation_sum used as a net-radiation proxy"
+  }
+}
