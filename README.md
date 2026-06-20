@@ -77,7 +77,7 @@ python build_temperature_dataset.py --out dataset_out
 
 The exporter builds a 30-day, per-city manifest for six Balkan cities by default. It downloads:
 
-- Sentinel-2 RGB cloud imagery
+- Sentinel-2 cloud masks
 - Sentinel-5P cloud and atmospheric statistics
 - Sentinel-3 OLCI atmospheric statistics
 - Open-Meteo daily weather values for temperature, wind, precipitation, cloud cover, and radiation
@@ -86,10 +86,10 @@ Outputs land in `dataset_out/`:
 
 - `dataset.jsonl`
 - `splits/train.jsonl`, `splits/val.jsonl`, `splits/test.jsonl`
-- `images/`
+- `masks/`
 - `metadata.json`
 - `dataset.pt` if `torch` is installed in the Python environment
 
 `shortwave_radiation_sum` is used as a net-radiation proxy because it is the most stable daily radiation field exposed by the weather API we are using here.
 
-Blank or fully transparent satellite renders are dropped automatically, and the whole city-day sample is removed from the manifest so you do not train on empty images.
+Blank or fully transparent satellite renders are dropped automatically, and the whole city-day sample is removed from the manifest so you do not train on empty masks.

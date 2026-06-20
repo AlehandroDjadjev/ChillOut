@@ -8,7 +8,7 @@ the existing Copernicus auth and request plumbing:
     npm start
 
 It downloads, for each selected Balkan city and each day in the window:
-  - a Sentinel-2 RGB image
+  - a Sentinel-2 cloud mask
   - Sentinel-5P cloud / atmospheric statistics
   - Sentinel-3 OLCI atmospheric statistics
   - Open-Meteo daily weather values for temperature, wind, radiation, rain, and cloud cover
@@ -120,8 +120,8 @@ def main() -> int:
     server_url = args.server_url.rstrip("/")
     out_dir = Path(args.out).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    images_dir = out_dir / "images"
-    images_dir.mkdir(exist_ok=True)
+    masks_dir = out_dir / "masks"
+    masks_dir.mkdir(exist_ok=True)
 
     check_server(server_url)
 
@@ -147,16 +147,16 @@ def main() -> int:
         merged = merge_city_series(city, bbox, date_range, weather_by_date, satellite_series)
 
         city_slug = slugify(city.name)
-        city_dir = images_dir / city_slug
+        city_dir = masks_dir / city_slug
         city_dir.mkdir(exist_ok=True)
 
         for sample in merged:
-            image_path = city_dir / f"{sample['date']}.png"
-            if not download_satellite_image(
+            mask_path = city_dir / f"{sample['date']}.png"
+            if not download_satellite_mask(
                 server_url,
                 bbox,
                 sample["date"],
-                image_path,
+                mask_path,
                 args.image_width,
                 args.image_height,
             ):
@@ -171,12 +171,12 @@ def main() -> int:
                 "bbox": bbox,
                 "date": sample["date"],
                 "anchor": f"{sample['date']}T00:00:00Z",
-                "image_path": str(image_path.relative_to(out_dir)).replace("\\", "/"),
+                "mask_path": str(mask_path.relative_to(out_dir)).replace("\\", "/"),
                 "target_temperature_c": sample["weather"].get(TARGET_FIELD),
                 "inputs": sample["inputs"],
                 "feature_vector": [float("nan") if sample["inputs"].get(name) is None else sample["inputs"].get(name) for name in feature_names],
                 "source_notes": {
-                    "image": "Sentinel-2 RGB daily composite",
+                    "mask": "Sentinel-2 cloud mask",
                     "satellite_stats": "Sentinel-5P + Sentinel-3 OLCI daily statistics",
                     "weather": "Open-Meteo daily weather (ERA5-based)",
                     "radiation_note": "shortwave_radiation_sum used as a net-radiation proxy",
@@ -351,17 +351,17 @@ def merge_city_series(
     return rows
 
 
-def download_satellite_image(
+def download_satellite_mask(
     server_url: str,
     bbox: List[float],
     date: str,
-    image_path: Path,
+    mask_path: Path,
     width: int,
     height: int,
 ) -> bool:
     payload = {
         "source": "sentinel2",
-        "field": "natural_color",
+        "field": "cloud_mask",
         "item": {"date": date, "label": date},
         "bbox": bbox,
         "width": width,
@@ -376,16 +376,16 @@ def download_satellite_image(
     if not data.startswith(PNG_SIGNATURE):
         return False
 
-    if is_empty_png(data):
-        if image_path.exists():
-            image_path.unlink()
+    if is_empty_mask_png(data):
+        if mask_path.exists():
+            mask_path.unlink()
         return False
 
-    image_path.write_bytes(data)
+    mask_path.write_bytes(data)
     return True
 
 
-def is_empty_png(data: bytes) -> bool:
+def is_empty_mask_png(data: bytes) -> bool:
     if not data.startswith(PNG_SIGNATURE):
         return False
 
@@ -404,12 +404,7 @@ def is_empty_png(data: bytes) -> bool:
     if all(pixel[3] == 0 for pixel in pixels):
         return True
 
-    first_pixel = pixels[0]
-    if all(pixel == first_pixel for pixel in pixels):
-        # A perfectly uniform tile is typically a no-data or placeholder render.
-        return True
-
-    # Near-empty: if almost all pixels are transparent, or the image carries almost no variation.
+    # Near-empty: if almost all pixels are transparent, treat it as no-data.
     opaque_pixels = [pixel for pixel in pixels if pixel[3] > 0]
     if len(opaque_pixels) <= max(1, int(len(pixels) * 0.01)):
         return True
@@ -581,7 +576,7 @@ def build_metadata(
         "radius_km": radius_km,
         "date_range": {"start": date_range[0], "end": date_range[-1]},
         "notes": [
-            "Cloud imagery comes from Sentinel-2 RGB composites.",
+            "Sentinel-2 cloud masks are the visual spatial input.",
             "Cloud composition uses Sentinel-5P and Sentinel-3 OLCI statistics.",
             "Weather comes from Open-Meteo historical data, which is ERA5-based.",
             "shortwave_radiation_sum is used as a net-radiation proxy.",
@@ -600,7 +595,7 @@ def export_torch_bundle(
     index_by_sample = {record["sample_id"]: idx for idx, record in enumerate(records)}
     feature_rows = []
     targets = []
-    image_paths = []
+    mask_paths = []
     sample_ids = []
     cities = []
     dates = []
@@ -608,7 +603,7 @@ def export_torch_bundle(
     for record in records:
         feature_rows.append([record["inputs"].get(name) for name in feature_names])
         targets.append(record["target_temperature_c"])
-        image_paths.append(record["image_path"])
+        mask_paths.append(record["mask_path"])
         sample_ids.append(record["sample_id"])
         cities.append(record["city"])
         dates.append(record["date"])
@@ -616,7 +611,7 @@ def export_torch_bundle(
     payload = {
         "feature_names": feature_names,
         "target_name": TARGET_FIELD,
-        "image_paths": image_paths,
+        "mask_paths": mask_paths,
         "sample_ids": sample_ids,
         "cities": cities,
         "dates": dates,
@@ -627,7 +622,7 @@ def export_torch_bundle(
             for split_name, rows in splits.items()
         },
         "metadata": {
-            "note": "Image decoding is intentionally left on disk so the bundle stays small.",
+            "note": "Mask decoding is intentionally left on disk so the bundle stays small.",
         },
     }
     torch.save(payload, out_path)
