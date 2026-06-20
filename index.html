@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Stara Zagora Sentinel-2 Cloud Viewer</title>
+    <title>Stara Zagora Field Explorer</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -11,36 +11,32 @@
       <section class="toolbar" aria-labelledby="app-title">
         <div>
           <p class="eyebrow">Copernicus Data Space Ecosystem</p>
-          <h1 id="app-title">Stara Zagora Sentinel-2 Cloud Viewer</h1>
+          <h1 id="app-title">Stara Zagora Field Explorer</h1>
           <p class="lede">
-            Compare cloud cover around Stara Zagora, Bulgaria across the latest
-            Sentinel-2 L2A acquisitions.
+            Compare Sentinel-2 imagery first, then switch into atmospheric and
+            weather fields around Stara Zagora, Bulgaria.
           </p>
         </div>
 
         <form id="settings-form" class="settings-panel">
           <div class="inline-fields">
             <label>
-              Max cloud %
-              <input id="max-cloud" min="0" max="100" step="1" type="number" value="100" />
+              Source
+              <select id="source"></select>
             </label>
 
             <label>
-              Render mode
-              <select id="render-mode">
-                <option value="overlay">True color + cloud overlay</option>
-                <option value="mask">Cloud mask</option>
-                <option value="probability">Cloud probability</option>
-              </select>
+              Field
+              <select id="field"></select>
             </label>
           </div>
 
           <div class="actions">
-            <button id="load-all" type="submit">Load latest 7 images</button>
+            <button id="load-all" type="submit">Load latest 7 samples</button>
           </div>
 
           <p id="global-status" class="status" role="status">
-            Start the local proxy with your .env credentials, then load imagery.
+            Choose a source and field, then load the latest 7 samples.
           </p>
         </form>
       </section>
@@ -57,7 +53,7 @@
           </div>
           <div>
             <dt>Collection</dt>
-            <dd>sentinel-2-l2a</dd>
+            <dd>sentinel-2-l2a / sentinel-5p-l2 / ERA5</dd>
           </div>
         </dl>
       </section>
