@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
@@ -25,6 +26,17 @@ def _scale01(x: torch.Tensor, lo: float, hi: float) -> torch.Tensor:
     return lo + x.clamp(0, 1) * (hi - lo)
 
 
+@lru_cache(maxsize=32)
+def _cached_grid(height: int, width: int, device_type: str, device_index: int | None) -> Tuple[torch.Tensor, torch.Tensor]:
+    device = torch.device(device_type, device_index) if device_index is not None else torch.device(device_type)
+    yy, xx = torch.meshgrid(
+        torch.arange(height, device=device),
+        torch.arange(width, device=device),
+        indexing="ij",
+    )
+    return yy.float()[None, None, :, :], xx.float()[None, None, :, :]
+
+
 def decode_params(params_tanh: torch.Tensor, ranges: PropertyRanges = PropertyRanges()) -> Dict[str, torch.Tensor]:
     """Decode tanh-bounded params [-1,1] into physical-ish values.
 
@@ -46,11 +58,8 @@ def decode_params(params_tanh: torch.Tensor, ranges: PropertyRanges = PropertyRa
 
 def gaussian_blobs(x01: torch.Tensor, y01: torch.Tensor, radius: torch.Tensor, height: int, width: int) -> torch.Tensor:
     """Return [B,K,H,W] soft blobs."""
-    b, k = x01.shape
     device = x01.device
-    yy, xx = torch.meshgrid(torch.arange(height, device=device), torch.arange(width, device=device), indexing="ij")
-    xx = xx.float()[None, None, :, :]
-    yy = yy.float()[None, None, :, :]
+    yy, xx = _cached_grid(height, width, device.type, device.index)
     x = x01[:, :, None, None] * (width - 1)
     y = y01[:, :, None, None] * (height - 1)
     r = radius[:, :, None, None].clamp_min(1e-3)
