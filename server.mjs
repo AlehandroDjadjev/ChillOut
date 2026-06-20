@@ -85,8 +85,86 @@ const S3_FIELDS = {
   },
 };
 
+const SLSTR_FIELDS = {
+  cloud_screening: {
+    band: "S1",
+    min: 0,
+    max: 1,
+    label: "Cloud screening",
+    unit: "reflectance",
+  },
+  cloud_flagging: {
+    band: "S3",
+    min: 0,
+    max: 1,
+    label: "Cloud flagging",
+    unit: "reflectance",
+  },
+  cirrus_detection: {
+    band: "S4",
+    min: 0,
+    max: 1,
+    label: "Cirrus detection",
+    unit: "reflectance",
+  },
+  cloud_clearing: {
+    band: "S5",
+    min: 0,
+    max: 1,
+    label: "Cloud clearing",
+    unit: "reflectance",
+  },
+};
+
 const ERA5_FIELDS = {
-  shortwave_radiation: { hourly: "shortwave_radiation", min: 0, max: 1000, label: "Radiation", unit: "W/m2", color: "#ffb454" },
+  shortwave_radiation: {
+    hourly: "shortwave_radiation",
+    min: 0,
+    max: 1000,
+    label: "Shortwave radiation",
+    unit: "W/m2",
+    color: "#ffb454",
+  },
+  direct_radiation: {
+    hourly: "direct_radiation",
+    min: 0,
+    max: 1000,
+    label: "Direct radiation",
+    unit: "W/m2",
+    color: "#ff9b42",
+  },
+  diffuse_radiation: {
+    hourly: "diffuse_radiation",
+    min: 0,
+    max: 1000,
+    label: "Diffuse radiation",
+    unit: "W/m2",
+    color: "#f2c94c",
+  },
+  direct_normal_irradiance: {
+    hourly: "direct_normal_irradiance",
+    min: 0,
+    max: 1200,
+    label: "Direct normal irradiance",
+    unit: "W/m2",
+    color: "#f08b3c",
+  },
+  global_tilted_radiation: {
+    hourly: "global_tilted_radiation",
+    min: 0,
+    max: 1200,
+    label: "Global tilted radiation",
+    unit: "W/m2",
+    color: "#f5b45a",
+  },
+  terrestrial_radiation: {
+    hourly: "terrestrial_radiation",
+    min: 0,
+    max: 700,
+    label: "Terrestrial radiation",
+    unit: "W/m2",
+    color: "#f0a04b",
+  },
   wind_speed_10m: { hourly: "wind_speed_10m", min: 0, max: 35, label: "Wind speed", unit: "m/s", color: "#73a5ff" },
   wind_direction_10m: { hourly: "wind_direction_10m", min: 0, max: 360, label: "Wind direction", unit: "deg", color: "#c58eff" },
   relative_humidity_2m: { hourly: "relative_humidity_2m", min: 0, max: 100, label: "Humidity", unit: "%", color: "#56d0d3" },
@@ -190,6 +268,16 @@ async function handleLatestScenes(request, response) {
     return;
   }
 
+  if (source === "sentinel3slstr") {
+    const scenes = await fetchCopernicusScenes({
+      source,
+      collection: "sentinel-3-slstr",
+      limit,
+    });
+    sendJson(response, 200, { source, scenes });
+    return;
+  }
+
   sendJson(response, 400, { message: `Unknown source: ${source}` });
 }
 
@@ -231,6 +319,15 @@ async function handleProcess(request, response) {
       response,
       buildSentinel3OlciProcessRequest(body.item, body.field, body),
       body.item?.label || body.item?.date || "Sentinel-3 OLCI scene"
+    );
+    return;
+  }
+
+  if (source === "sentinel3slstr") {
+    await proxyCopernicusProcess(
+      response,
+      buildSentinel3SlstrProcessRequest(body.item, body.field, body),
+      body.item?.label || body.item?.date || "Sentinel-3 SLSTR scene"
     );
     return;
   }
@@ -318,6 +415,7 @@ async function fetchCopernicusScenes({ source, collection, limit }) {
     sentinel2: "Sentinel-2 surface scene",
     sentinel5p: "Sentinel-5P daily pass",
     sentinel3olci: "Sentinel-3 OLCI atmospheric scene",
+    sentinel3slstr: "Sentinel-3 SLSTR cloud proxy",
   }[source] || "Scene";
 
   for (const days of windowsInDays) {
@@ -535,6 +633,46 @@ function buildSentinel3OlciProcessRequest(item, field, options) {
   };
 }
 
+function buildSentinel3SlstrProcessRequest(item, field, options) {
+  const fieldMeta = SLSTR_FIELDS[field] || SLSTR_FIELDS.cloud_screening;
+  const date = item?.date || item?.datetime?.slice(0, 10);
+
+  return {
+    input: {
+      bounds: {
+        bbox: options.bbox || getPublicConfig().bbox,
+      },
+      data: [
+        {
+          type: "sentinel-3-slstr",
+          dataFilter: {
+            timeRange: {
+              from: `${date}T00:00:00Z`,
+              to: `${date}T23:59:59Z`,
+            },
+            mosaickingOrder: "mostRecent",
+          },
+          processing: {
+            upsampling: "NEAREST",
+            downsampling: "NEAREST",
+          },
+        },
+      ],
+    },
+    output: {
+      width: clampNumber(options.width, 32, 4096, 768),
+      height: clampNumber(options.height, 32, 4096, 480),
+      responses: [
+        {
+          identifier: "default",
+          format: { type: "image/png" },
+        },
+      ],
+    },
+    evalscript: buildSingleBandEvalscript(fieldMeta.band, fieldMeta.min, fieldMeta.max),
+  };
+}
+
 function buildSentinel2ProcessRequest(item, field, options) {
   const date = item?.date || item?.datetime?.slice(0, 10);
   const mode = field || "natural_color";
@@ -642,15 +780,6 @@ function evaluatePixel(sample) {
 }`;
 }
 
-function buildSingleBandEvalscript(band, min, max) {
-  return `//VERSION=3
-function setup() {
-  return {
-    input: ["${band}", "dataMask"],
-    output: { bands: 4, sampleType: "AUTO" }
-  };
-}
-
 async function buildEra5StatisticsSeries(hourlyVar, days, bbox) {
   const dates = buildRecentDays(days).reverse();
   const points = [];
@@ -668,6 +797,15 @@ async function buildEra5StatisticsSeries(hourlyVar, days, bbox) {
   }
 
   return points;
+}
+
+function buildSingleBandEvalscript(band, min, max) {
+  return `//VERSION=3
+function setup() {
+  return {
+    input: ["${band}", "dataMask"],
+    output: { bands: 4, sampleType: "AUTO" }
+  };
 }
 
 function clamp(value, min, max) {
@@ -796,7 +934,7 @@ async function renderEra5Svg(date, field, options) {
   )}</text>
   <rect x="28" y="96" width="${width - 56}" height="${height - 124}" rx="10" fill="rgba(8,22,30,0.22)" />
   ${barRects}
-  <polyline fill="none" stroke="#ffb454" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${linePoints}" />
+  <polyline fill="none" stroke="${meta.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${linePoints}" />
   <text x="${width - 32}" y="${height - 28}" text-anchor="end" fill="rgba(248,251,252,0.82)" font-size="13">${escapeXml(
     meta.unit ? `${meta.unit} over 24 hours` : "24 hour series"
   )}</text>
@@ -1053,6 +1191,10 @@ function normalizeSource(source) {
     return "sentinel3olci";
   }
 
+  if (value === "sentinel-3-slstr" || value === "sentinel3slstr" || value === "s3slstr" || value === "slstr") {
+    return "sentinel3slstr";
+  }
+
   if (value === "era-5" || value === "era_5") {
     return "era5";
   }
@@ -1067,6 +1209,10 @@ function getStatFieldMeta(source, field) {
 
   if (source === "sentinel3olci") {
     return S3_FIELDS[field] || null;
+  }
+
+  if (source === "sentinel3slstr") {
+    return SLSTR_FIELDS[field] || null;
   }
 
   if (source === "sentinel2") {
@@ -1105,6 +1251,10 @@ function getStatisticsDataType(source) {
     return "sentinel-3-olci";
   }
 
+  if (source === "sentinel3slstr") {
+    return "sentinel-3-slstr";
+  }
+
   if (source === "sentinel2") {
     return "sentinel-2-l2a";
   }
@@ -1138,6 +1288,10 @@ function getStatisticsResolution(source, field, days) {
 
   if (source === "sentinel3olci") {
     return 0.003;
+  }
+
+  if (source === "sentinel3slstr") {
+    return 0.005;
   }
 
   if (source === "sentinel2") {
