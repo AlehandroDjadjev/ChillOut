@@ -86,6 +86,60 @@ class CloudImageEncoder(nn.Module):
         return self.proj(self.cnn(mask))
 
 
+class ResBlock(nn.Module):
+    def __init__(self, channels: int, dropout: float):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.SiLU(inplace=True),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+            nn.SiLU(inplace=True),
+            nn.Dropout2d(dropout),
+            nn.Conv2d(channels, channels, 3, padding=1, bias=False),
+            nn.BatchNorm2d(channels),
+        )
+        self.act = nn.SiLU(inplace=True)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.act(x + self.net(x))
+
+
+class DownStage(nn.Module):
+    def __init__(self, in_ch: int, out_ch: int, blocks: int, dropout: float):
+        super().__init__()
+        layers = [
+            nn.Conv2d(in_ch, out_ch, 3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.SiLU(inplace=True),
+        ]
+        for _ in range(blocks):
+            layers.append(ResBlock(out_ch, dropout))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class DeepCloudCNN(nn.Module):
+    def __init__(self, embedding_dim: int = 512):
+        super().__init__()
+        self.net = nn.Sequential(
+            DownStage(1, 48, blocks=2, dropout=0.02),
+            DownStage(48, 96, blocks=2, dropout=0.03),
+            DownStage(96, 192, blocks=3, dropout=0.04),
+            DownStage(192, 384, blocks=3, dropout=0.05),
+            DownStage(384, 512, blocks=2, dropout=0.05),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(512, embedding_dim),
+            nn.LayerNorm(embedding_dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 class TabularEncoder(nn.Module):
     def __init__(self, num_features: int, tab_embedding_dim: int = 128):
         super().__init__()
@@ -107,13 +161,17 @@ class TabularEncoder(nn.Module):
         return self.net(features)
 
 
-class CloudTempModel(nn.Module):
-    def __init__(self, num_features: int, image_embedding_dim: int = 256, tab_embedding_dim: int = 128):
+class CloudTempDeepModel(nn.Module):
+    def __init__(self, num_features: int):
         super().__init__()
-        self.image_encoder = CloudImageEncoder(image_embedding_dim=image_embedding_dim)
-        self.tabular_encoder = TabularEncoder(num_features=num_features, tab_embedding_dim=tab_embedding_dim)
+        self.image_encoder = DeepCloudCNN(embedding_dim=512)
+        self.tabular_encoder = TabularEncoder(num_features=num_features, tab_embedding_dim=256)
         self.head = nn.Sequential(
-            nn.Linear(image_embedding_dim + tab_embedding_dim, 256),
+            nn.Linear(512 + 256, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(inplace=True),
+            nn.Dropout(0.20),
+            nn.Linear(512, 256),
             nn.LayerNorm(256),
             nn.SiLU(inplace=True),
             nn.Dropout(0.15),
@@ -127,9 +185,28 @@ class CloudTempModel(nn.Module):
         )
 
     def forward(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
-        img_emb = self.image_encoder(mask)
+        image_emb = self.image_encoder(mask)
         tab_emb = self.tabular_encoder(features)
-        return self.head(torch.cat([img_emb, tab_emb], dim=1))
+        return self.head(torch.cat([image_emb, tab_emb], dim=1))
+
+
+def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    if not any(key.startswith("module.") for key in state):
+        return state
+    return {key.removeprefix("module."): value for key, value in state.items()}
+
+
+def _is_deep_checkpoint(state: Dict[str, torch.Tensor]) -> bool:
+    return any(key.startswith("image_encoder.net.") for key in state)
+
+
+def _assert_deep_checkpoint(state: Dict[str, torch.Tensor], resolved_path: Path) -> None:
+    if _is_deep_checkpoint(state):
+        return
+    raise RuntimeError(
+        "The reward wrapper now accepts only deep first-model checkpoints. "
+        f"Checkpoint {resolved_path} does not look like a deep-model state dict."
+    )
 
 
 class CloudTempCheckpointReward(AbstractRewardModel):
@@ -166,12 +243,10 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.register_buffer("feature_mean", feature_mean)
         self.register_buffer("feature_std", feature_std)
 
-        self.model = CloudTempModel(num_features=len(self.model_feature_names))
-        state = ckpt["model_state"]
-        try:
-            self.model.load_state_dict(state)
-        except RuntimeError:
-            self.model.load_state_dict({key.replace("module.", ""): value for key, value in state.items()})
+        state = _strip_module_prefix(ckpt["model_state"])
+        _assert_deep_checkpoint(state, resolved)
+        self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
+        self.model.load_state_dict(state)
         self.model.eval()
         for param in self.model.parameters():
             param.requires_grad_(False)

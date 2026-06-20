@@ -168,7 +168,7 @@ The dataset will use that file automatically. If it is missing, fallback default
 ## Resume and reward checkpoint
 
 The RL trainer resumes from `policy_latest.pt` automatically when it exists. It
-can also score actions with the latest first-model checkpoint:
+can score actions with the deep first-model checkpoint only:
 
 ```bash
 python train_rl.py \
@@ -179,7 +179,7 @@ python train_rl.py \
   --reward-checkpoint /workspace/cloud_project/runs/cloud_temp_deep_480x300/best.pt
 ```
 
-To use a local first-model run folder instead, pass:
+To use a local deep first-model run folder instead, pass:
 
 ```bash
 python train_rl.py \
@@ -221,12 +221,15 @@ python train_rl.py \
 ## Resume the first model
 
 The temperature model now resumes from `last.pt` automatically when it exists.
-You can also force a specific checkpoint or disable resume:
+Use the deep trainer for new runs and continued training:
 
 ```bash
-python train_cloud_temp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp --resume auto
-python train_cloud_temp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp --resume none
+python train_cloud_temp_deep_ddp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp_deep_480x300 --resume auto
+python train_cloud_temp_deep_ddp.py --data-root ../dataset_out --out-dir ../runs/cloud_temp_deep_480x300 --resume none
 ```
+
+The older lightweight trainer is kept for compatibility, but the RL reward path
+now expects deep checkpoints only.
 
 ## Zip weights
 
