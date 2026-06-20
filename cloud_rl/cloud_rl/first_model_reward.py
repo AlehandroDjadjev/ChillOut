@@ -173,6 +173,115 @@ class CloudTempDeepModel(nn.Module):
         return self.head(torch.cat([image_emb, tab_emb], dim=1))
 
 
+class CloudImageEncoder(nn.Module):
+    def __init__(self, embedding_dim: int = 256):
+        super().__init__()
+        self.net = nn.Sequential(
+            DownStage(1, 32, blocks=1, dropout=0.02),
+            DownStage(32, 64, blocks=2, dropout=0.03),
+            DownStage(64, 128, blocks=2, dropout=0.04),
+            DownStage(128, 256, blocks=2, dropout=0.05),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(256, embedding_dim),
+            nn.LayerNorm(embedding_dim),
+            nn.SiLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class MLP(nn.Module):
+    def __init__(self, in_dim: int, hidden: List[int], out_dim: int, dropout: float):
+        super().__init__()
+        layers: List[nn.Module] = []
+        prev = in_dim
+        for h in hidden:
+            layers += [nn.Linear(prev, h), nn.LayerNorm(h), nn.SiLU(inplace=True), nn.Dropout(dropout)]
+            prev = h
+        layers += [nn.Linear(prev, out_dim), nn.LayerNorm(out_dim), nn.SiLU(inplace=True)]
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class CloudWorldInteractionModel(nn.Module):
+    def __init__(
+        self,
+        num_cloud_features: int,
+        num_world_features: int,
+        cloud_dim: int = 256,
+        world_dim: int = 192,
+        seq_dim: int = 192,
+        dropout: float = 0.10,
+        use_gru: bool = True,
+    ):
+        super().__init__()
+        self.use_gru = use_gru
+        self.cloud_image = CloudImageEncoder(embedding_dim=cloud_dim)
+        self.image_frame = MLP(cloud_dim, [cloud_dim], seq_dim, dropout=dropout)
+        self.cloud_scalar = MLP(num_cloud_features, [128, 128], cloud_dim // 2, dropout=dropout)
+        self.cloud_frame = MLP(cloud_dim + cloud_dim // 2, [cloud_dim], seq_dim, dropout=dropout)
+        self.world_frame = MLP(num_world_features, [192, 192], seq_dim, dropout=dropout)
+
+        if use_gru:
+            self.image_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
+            self.cloud_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
+            self.world_gru = nn.GRU(seq_dim, seq_dim, batch_first=True)
+        else:
+            self.image_gru = None
+            self.cloud_gru = None
+            self.world_gru = None
+
+        self.image_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
+        self.cloud_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
+        self.world_head = nn.Sequential(nn.Linear(seq_dim, 96), nn.SiLU(inplace=True), nn.Linear(96, 1))
+        self.final_bias = nn.Parameter(torch.zeros(1))
+
+    def encode_image_sequence(self, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        b, t, c, h, w = mask.shape
+        mask_2d = mask.reshape(b * t, c, h, w).contiguous(memory_format=torch.channels_last)
+        img_emb = self.cloud_image(mask_2d).view(b, t, -1)
+        img_frame = self.image_frame(img_emb.reshape(b * t, -1)).view(b, t, -1)
+        if self.use_gru:
+            _, h_last = self.image_gru(img_frame)
+            return h_last[-1], img_emb
+        return img_frame.mean(dim=1), img_emb
+
+    def encode_cloud(self, mask: torch.Tensor, cloud_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        b, t, _, _, _ = mask.shape
+        image_seq, img_emb = self.encode_image_sequence(mask)
+        scalar_emb = self.cloud_scalar(cloud_features.reshape(b * t, cloud_features.size(-1))).view(b, t, -1)
+        frame = self.cloud_frame(torch.cat([img_emb, scalar_emb], dim=-1).reshape(b * t, -1)).view(b, t, -1)
+        if self.use_gru:
+            _, h_last = self.cloud_gru(frame)
+            return h_last[-1], image_seq
+        return frame.mean(dim=1), image_seq
+
+    def encode_world(self, world_features: torch.Tensor) -> torch.Tensor:
+        b, t, f = world_features.shape
+        frame = self.world_frame(world_features.reshape(b * t, f)).view(b, t, -1)
+        if self.use_gru:
+            _, h_last = self.world_gru(frame)
+            return h_last[-1]
+        return frame.mean(dim=1)
+
+    def forward(self, mask: torch.Tensor, cloud_features: torch.Tensor, world_features: torch.Tensor) -> Dict[str, torch.Tensor]:
+        cloud, image_only = self.encode_cloud(mask, cloud_features)
+        world = self.encode_world(world_features)
+        image_pred = self.image_head(image_only)
+        cloud_pred = self.cloud_head(cloud)
+        world_pred = self.world_head(world)
+        return {
+            "final": image_pred + cloud_pred + world_pred + self.final_bias,
+            "image": image_pred,
+            "cloud": cloud_pred,
+            "world": world_pred,
+        }
+
+
 def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if not any(key.startswith("module.") for key in state):
         return state
@@ -191,6 +300,8 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self,
         checkpoint_path: str | Path,
         reward_scale_c: float = 5.0,
+        improvement_gain: float = 100.0,
+        absolute_error_weight: float = 0.0,
         optional_budget_penalty: float = 0.0,
         prefer_best: bool = True,
     ) -> None:
@@ -200,11 +311,18 @@ class CloudTempCheckpointReward(AbstractRewardModel):
 
         self.checkpoint_path = str(resolved)
         self.reward_scale_c = float(reward_scale_c)
+        self.improvement_gain = float(improvement_gain)
+        self.absolute_error_weight = float(absolute_error_weight)
         self.optional_budget_penalty = float(optional_budget_penalty)
         self.raw_feature_names = list(ckpt["raw_feature_names"])
-        self.model_feature_names = list(ckpt["model_feature_names"])
+        self.model_feature_names = list(ckpt.get("model_feature_names", self.raw_feature_names))
+        self.cloud_feature_names = list(ckpt.get("cloud_feature_names", []))
+        self.world_feature_names = list(ckpt.get("world_feature_names", []))
+        self.architecture = str(ckpt.get("architecture", "CloudTempDeepModel"))
+        self.model_kind = "interaction" if self.cloud_feature_names and self.world_feature_names else "deep"
         self.image_height = int(ckpt["image_height"])
         self.image_width = int(ckpt["image_width"])
+        self.lookback = int(ckpt.get("lookback", 1))
 
         normalizer = ckpt["normalizer"]
         feature_mean = torch.tensor(normalizer["mean"], dtype=torch.float32)
@@ -212,9 +330,18 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         feature_std = torch.where(feature_std.abs() < 1e-6, torch.ones_like(feature_std), feature_std)
         self.register_buffer("feature_mean", feature_mean)
         self.register_buffer("feature_std", feature_std)
+        target_norm = ckpt.get("target_normalizer") or {"mean": 0.0, "std": 1.0}
+        self.target_mean_c = float(target_norm.get("mean", 0.0))
+        self.target_std_c = float(target_norm.get("std", 1.0)) or 1.0
 
         state = _strip_module_prefix(ckpt["model_state"])
-        self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
+        if self.model_kind == "interaction":
+            kwargs = dict(ckpt.get("model_kwargs") or {})
+            kwargs.setdefault("num_cloud_features", len(self.cloud_feature_names))
+            kwargs.setdefault("num_world_features", len(self.world_feature_names))
+            self.model = CloudWorldInteractionModel(**kwargs)
+        else:
+            self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
         self.model.load_state_dict(state)
         if torch.cuda.is_available():
             self.model = self.model.to(memory_format=torch.channels_last)
@@ -238,11 +365,11 @@ class CloudTempCheckpointReward(AbstractRewardModel):
     def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
         raw = feature_vector.float()
         source_names = self._resolve_feature_names(raw.shape[1])
-        if raw.shape[1] == len(self.model_feature_names):
+        if self.model_kind == "deep" and raw.shape[1] == len(self.model_feature_names):
             processed = raw
         else:
             aligned = _align_by_names(raw, source_names, self.raw_feature_names)
-            processed = _transform_raw_features(aligned, self.raw_feature_names)
+            processed = aligned if self.model_kind == "interaction" else _transform_raw_features(aligned, self.raw_feature_names)
 
         expected_dim = self.feature_mean.shape[0]
         if processed.shape[1] < expected_dim:
@@ -261,6 +388,22 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             align_corners=False,
         )
 
+    def _predict_temperature(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
+        if self.model_kind == "deep":
+            return self.model(mask, features)
+
+        raw_index = {name: i for i, name in enumerate(self.raw_feature_names)}
+        cloud_idx = [raw_index[name] for name in self.cloud_feature_names]
+        world_idx = [raw_index[name] for name in self.world_feature_names]
+        cloud = features[:, cloud_idx]
+        world = features[:, world_idx]
+        steps = max(1, self.lookback)
+        seq_mask = mask[:, None, :, :, :].expand(-1, steps, -1, -1, -1).contiguous()
+        seq_cloud = cloud[:, None, :].expand(-1, steps, -1).contiguous()
+        seq_world = world[:, None, :].expand(-1, steps, -1).contiguous()
+        pred_norm = self.model(seq_mask, seq_cloud, seq_world)["final"]
+        return pred_norm * self.target_std_c + self.target_mean_c
+
     def forward(
         self,
         original_mask: torch.Tensor,
@@ -269,20 +412,34 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         target_temperature: torch.Tensor,
         property_maps: torch.Tensor,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        mask = self._prepare_mask(generated_mask)
-        if mask.ndim == 4 and mask.is_cuda:
-            mask = mask.contiguous(memory_format=torch.channels_last)
+        original = self._prepare_mask(original_mask)
+        generated = self._prepare_mask(generated_mask)
+        if original.ndim == 4 and original.is_cuda:
+            original = original.contiguous(memory_format=torch.channels_last)
+        if generated.ndim == 4 and generated.is_cuda:
+            generated = generated.contiguous(memory_format=torch.channels_last)
         features = self._prepare_features(feature_vector)
 
         with torch.inference_mode():
-            if mask.is_cuda:
+            if generated.is_cuda:
+                stacked_masks = torch.cat([original, generated], dim=0)
+                stacked_features = torch.cat([features, features], dim=0)
                 with torch.autocast(device_type="cuda", enabled=True):
-                    predicted_temperature = self.model(mask, features)
+                    stacked_pred = self._predict_temperature(stacked_masks, stacked_features)
             else:
-                predicted_temperature = self.model(mask, features)
+                stacked_pred = self._predict_temperature(
+                    torch.cat([original, generated], dim=0),
+                    torch.cat([features, features], dim=0),
+                )
 
+        original_predicted_temperature, predicted_temperature = stacked_pred.chunk(2, dim=0)
+
+        original_temp_error = (original_predicted_temperature - target_temperature.float()).abs()
         temp_error = (predicted_temperature - target_temperature.float()).abs()
-        reward = torch.exp(-temp_error / max(1e-6, self.reward_scale_c))
+        temp_improvement = original_temp_error - temp_error
+        reward = self.improvement_gain * temp_improvement
+        if self.absolute_error_weight:
+            reward = reward - self.absolute_error_weight * temp_error
 
         if self.optional_budget_penalty > 0:
             change_cost = (generated_mask - original_mask).abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
@@ -290,6 +447,9 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             reward = reward - self.optional_budget_penalty * (change_cost + prop_cost)
 
         return reward, {
+            "original_predicted_temperature_c": original_predicted_temperature.detach(),
+            "original_temp_error_c": original_temp_error.detach(),
             "predicted_temperature_c": predicted_temperature.detach(),
             "temp_error_c": temp_error.detach(),
+            "temp_improvement_c": temp_improvement.detach(),
         }

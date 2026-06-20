@@ -274,6 +274,33 @@ eval_outputs/
   <sample_id>_height_norm.png
 ```
 
+<<<<<<< HEAD
+=======
+## Diagnose RL behavior
+
+Run the deeper diagnostic pass against a real policy and the first-model reward:
+
+```bash
+python diagnose_rl.py \
+  --policy-checkpoint ./runs/cloud_rl/policy_latest.pt \
+  --reward-checkpoint /workspace/cloud_project/runs/cloud_temp_deep_480x300/last.pt \
+  --data-root ../dataset_out \
+  --split val \
+  --num-batches 12 \
+  --out-dir ./rl_diagnostics
+```
+
+This prints and saves:
+
+- policy vs noop vs random reward
+- predicted temperature error
+- mask change magnitude
+- non-noop action rate
+- correlation between reward gain and temperature-error improvement
+
+The output file is `./rl_diagnostics/rl_diagnostics.json`.
+
+>>>>>>> a9ab4c8aa146ced4d7e82627c2b155b681f8f9fa
 ## How to plug in the future ConvLSTM reward model
 
 The reward interface is already fixed as:
