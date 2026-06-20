@@ -54,6 +54,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+
 try:
     from dotenv import load_dotenv
 except Exception:
@@ -678,7 +683,7 @@ def main() -> int:
     parser.add_argument("--resolution-m", type=float, default=250.0)
     parser.add_argument("--max-cloud", type=float, default=100.0)
     parser.add_argument("--max-scenes-per-location", type=int, default=200)
-    parser.add_argument("--s2-workers", type=int, default=8)
+    parser.add_argument("--s2-workers", type=int, default=2)
     parser.add_argument("--openmeteo-workers", type=int, default=1, help="Use 1 for Open-Meteo free API safety. Higher can hit 429.")
     parser.add_argument("--openmeteo-retries", type=int, default=8)
     parser.add_argument("--openmeteo-sleep-s", type=float, default=8.0, help="Sleep before each uncached Open-Meteo request.")
