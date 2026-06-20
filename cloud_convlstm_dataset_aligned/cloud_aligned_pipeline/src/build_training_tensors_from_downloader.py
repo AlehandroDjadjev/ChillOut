@@ -93,6 +93,34 @@ CORE20_INPUT_CHANNELS = [
     "era5_wind_speed_10m",
 ]
 
+# Cloud-forcing profile for Open-Meteo mode.
+# Goal: make visual Sentinel-2 cloud state matter more by removing shortcut channels:
+# - no current temperature input
+# - no Open-Meteo scalar cloud-cover inputs
+# - no current all-sky shortwave/net radiation input
+# - no fake/dead longwave, cloud-liquid/ice, or WVP placeholder channels
+# One solar context field is kept so the model knows how much sun is available;
+# clouds must explain the attenuation.
+CLOUDFORCE_INPUT_CHANNELS = [
+    "s2_cloud_mask_scl",
+    "s2_cloud_white",         # derived from SCL mask: clouds=1, non-cloud=0
+    "s2_cloud_prob_CLP",
+    "s2_cirrus_flag",
+    "s2_high_cloud_flag",
+    "s2_medium_cloud_flag",
+    "s2_aerosol_AOT",
+    "era5_surface_solar_radiation_downwards_clear_sky",  # the only sun/radiation context input
+    "era5_2m_dewpoint_temperature",
+    "era5_total_column_water_vapour",
+    "era5_surface_pressure",
+    "era5_wind_speed_10m",
+]
+
+CLOUDFORCE_TARGET_CHANNELS = [
+    "shortwave_cloud_attenuation",
+    "temperature_anomaly",
+]
+
 TARGET_CHANNELS = [
     "shortwave_anomaly",
     "longwave_anomaly",
@@ -110,6 +138,7 @@ ERA5_ALIASES = {
     "era5_total_column_cloud_ice_water": "era5_single_total_column_cloud_ice_water",
     "era5_surface_solar_radiation_downwards": "era5_single_surface_solar_radiation_downwards",
     "era5_surface_solar_radiation_downwards_clear_sky": "era5_single_surface_solar_radiation_downwards_clear_sky",
+    "era5_surface_solar_radiation_downward_clear_sky": "era5_single_surface_solar_radiation_downward_clear_sky",
     "era5_surface_thermal_radiation_downwards": "era5_single_surface_thermal_radiation_downwards",
     "era5_surface_thermal_radiation_downwards_clear_sky": "era5_single_surface_thermal_radiation_downwards_clear_sky",
     "era5_surface_net_solar_radiation": "era5_single_surface_net_solar_radiation",
@@ -207,6 +236,11 @@ def get_era5(payload: dict[str, np.ndarray], logical_name: str, height: int, wid
 
 
 def extract_raw_field(payload: dict[str, np.ndarray], channel_name: str, height: int, width: int) -> np.ndarray:
+    if channel_name == "s2_cloud_white":
+        # Dataset-creation cloud gate: pure white cloud mask, black elsewhere.
+        # This works even for older downloaded tensors where band 1 was gray reflectance.
+        return get_s2_band(payload, "cloud_mask_scl", height, width)
+
     if channel_name.startswith("s2_"):
         s2_name = channel_name.removeprefix("s2_")
         return get_s2_band(payload, s2_name, height, width)
@@ -224,9 +258,41 @@ def extract_raw_field(payload: dict[str, np.ndarray], channel_name: str, height:
     return get_era5(payload, channel_name, height, width)
 
 
-def compute_target_raw(payload: dict[str, np.ndarray], height: int, width: int) -> np.ndarray:
+def compute_target_raw(
+    payload: dict[str, np.ndarray],
+    height: int,
+    width: int,
+    target_channels: list[str] | None = None,
+) -> np.ndarray:
+    """Build raw target maps.
+
+    Default/builder24 target is kept for backward compatibility.
+
+    Cloudforce target is intentionally smaller and cleaner:
+      1) shortwave_cloud_attenuation = (sun_context - all_sky_shortwave) / sun_context
+      2) temperature_anomaly = raw 2m temperature now; converted to anomaly later.
+
+    This removes fake Open-Meteo longwave/net outputs and makes the radiation target
+    closer to "how much clouds reduced sunlight" rather than raw solar/season.
+    """
+    target_channels = target_channels or TARGET_CHANNELS
+
     ssrd = get_era5(payload, "era5_surface_solar_radiation_downwards", height, width)
+    # Try both names because older patches used both downwards/downward.
     ssrdc = get_era5(payload, "era5_surface_solar_radiation_downwards_clear_sky", height, width)
+    if not np.any(np.isfinite(ssrdc)) or float(np.nanmax(np.abs(ssrdc))) <= 1e-8:
+        ssrdc = get_era5(payload, "era5_surface_solar_radiation_downward_clear_sky", height, width)
+
+    temp = get_era5(payload, "era5_2m_temperature", height, width)
+
+    if target_channels == CLOUDFORCE_TARGET_CHANNELS:
+        denom = np.maximum(np.abs(ssrdc), 1.0).astype(np.float32)
+        attenuation = (ssrdc - ssrd) / denom
+        attenuation = np.nan_to_num(attenuation, nan=0.0, posinf=0.0, neginf=0.0)
+        # Clipping prevents one bad proxy clear-sky value from dominating training.
+        attenuation = np.clip(attenuation, -1.0, 2.0).astype(np.float32)
+        return np.stack([attenuation, temp], axis=0).astype(np.float32)
+
     strd = get_era5(payload, "era5_surface_thermal_radiation_downwards", height, width)
     strdc = get_era5(payload, "era5_surface_thermal_radiation_downwards_clear_sky", height, width)
 
@@ -235,13 +301,8 @@ def compute_target_raw(payload: dict[str, np.ndarray], height: int, width: int) 
     strn = get_era5(payload, "era5_surface_net_thermal_radiation", height, width)
     strnc = get_era5(payload, "era5_surface_net_thermal_radiation_clear_sky", height, width)
 
-    temp = get_era5(payload, "era5_2m_temperature", height, width)
-
     shortwave_anom = ssrd - ssrdc
     longwave_anom = strd - strdc
-
-    # Prefer clear-sky net anomaly if available. If clear-sky fields are all
-    # missing/zero, this will degrade to all-sky net after normalization.
     net_anom = (ssr - ssrc) + (strn - strnc)
 
     return np.stack([shortwave_anom, longwave_anom, net_anom, temp], axis=0).astype(np.float32)
@@ -258,7 +319,7 @@ def apply_temperature_anomaly(
     rows: list[dict],
     input_channel_names: list[str],
     temp_input_name: str = "era5_2m_temperature_anomaly",
-    target_temp_index: int = 3,
+    target_temp_index: int | None = 3,
     bin_days: int = 15,
 ) -> None:
     """Convert raw 2m temperature maps into per-location seasonal anomalies.
@@ -280,8 +341,9 @@ def apply_temperature_anomaly(
         if len(indices) < 2:
             # Fallback to local group itself; anomaly will be near zero.
             pass
-        target_base = np.nanmean(y_series[indices, target_temp_index], axis=0)
-        y_series[indices, target_temp_index] -= target_base
+        if target_temp_index is not None:
+            target_base = np.nanmean(y_series[indices, target_temp_index], axis=0)
+            y_series[indices, target_temp_index] -= target_base
 
         if temp_input_idx is not None:
             input_base = np.nanmean(x_series[indices, temp_input_idx], axis=0)
@@ -339,6 +401,7 @@ def build_windows_for_location(
     horizon: int,
     train_frac: float,
     val_frac: float,
+    max_gap_days: float | None = None,
 ) -> tuple[list[dict], list[dict], list[dict], list[int]]:
     # loc_rows must be sorted by timestamp and contain global_idx.
     n = len(loc_rows)
@@ -357,6 +420,15 @@ def build_windows_for_location(
         x_end_i = target_start_i
         y_start_i = target_start_i
         y_end_i = target_start_i + horizon
+
+        if max_gap_days is not None and max_gap_days > 0:
+            window_times = [loc_rows[j]["timestamp"] for j in range(x_start_i, y_end_i)]
+            gaps = [
+                (window_times[j + 1] - window_times[j]).total_seconds() / 86400.0
+                for j in range(len(window_times) - 1)
+            ]
+            if gaps and max(gaps) > max_gap_days:
+                continue
 
         # Split by target start time, so validation/test future is not used in train.
         if target_start_i < train_cut:
@@ -394,7 +466,7 @@ def main():
     )
     parser.add_argument("--dataset-dir", required=True, help="Output directory from cloud_state_dataset_downloader.py")
     parser.add_argument("--out-dir", default="data/processed_aligned", help="Where to write x_series/y_series and window CSVs")
-    parser.add_argument("--profile", choices=["core20", "builder24"], default="builder24")
+    parser.add_argument("--profile", choices=["core20", "builder24", "cloudforce"], default="builder24")
     parser.add_argument("--height", type=int, default=64)
     parser.add_argument("--width", type=int, default=64)
     parser.add_argument("--input-len", type=int, default=8, help="8 snapshots = about 40 days at 5-day cadence")
@@ -403,6 +475,7 @@ def main():
     parser.add_argument("--val-frac", type=float, default=0.15)
     parser.add_argument("--seasonal-bin-days", type=int, default=15)
     parser.add_argument("--max-states", type=int, default=None, help="Optional cap for testing converter")
+    parser.add_argument("--max-gap-days", type=float, default=12.0, help="Skip windows with any adjacent state gap larger than this. Use 0 to disable.")
     args = parser.parse_args()
 
     dataset_dir = Path(args.dataset_dir)
@@ -416,7 +489,17 @@ def main():
     if not states_dir.exists():
         raise FileNotFoundError(f"Missing states_npz directory: {states_dir}. Run downloader with --build-npz.")
 
-    input_channels = BUILDER24_INPUT_CHANNELS if args.profile == "builder24" else CORE20_INPUT_CHANNELS
+    if args.profile == "builder24":
+        input_channels = BUILDER24_INPUT_CHANNELS
+        target_channels = TARGET_CHANNELS
+    elif args.profile == "core20":
+        input_channels = CORE20_INPUT_CHANNELS
+        target_channels = TARGET_CHANNELS
+    elif args.profile == "cloudforce":
+        input_channels = CLOUDFORCE_INPUT_CHANNELS
+        target_channels = CLOUDFORCE_TARGET_CHANNELS
+    else:
+        raise ValueError(f"Unknown profile: {args.profile}")
 
     df = pd.read_csv(meta_path)
     if "s2_download_ok" in df.columns:
@@ -443,7 +526,7 @@ def main():
 
     n = len(rows)
     c_in = len(input_channels)
-    c_out = len(TARGET_CHANNELS)
+    c_out = len(target_channels)
     h, w = args.height, args.width
 
     x_series = np.zeros((n, c_in, h, w), dtype=np.float32)
@@ -455,16 +538,18 @@ def main():
         for ci, name in enumerate(input_channels):
             x_series[i, ci] = extract_raw_field(payload, name, h, w)
 
-        y_series[i] = compute_target_raw(payload, h, w)
+        y_series[i] = compute_target_raw(payload, h, w, target_channels)
 
         row["global_idx"] = i
 
     # Convert raw 2m temperature fields to seasonal anomalies.
+    target_temp_index = target_channels.index("temperature_anomaly") if "temperature_anomaly" in target_channels else None
     apply_temperature_anomaly(
         x_series,
         y_series,
         rows,
         input_channels,
+        target_temp_index=target_temp_index,
         bin_days=args.seasonal_bin_days,
     )
 
@@ -480,6 +565,7 @@ def main():
             horizon=args.horizon,
             train_frac=args.train_frac,
             val_frac=args.val_frac,
+            max_gap_days=(None if args.max_gap_days <= 0 else args.max_gap_days),
         )
         train_windows.extend(tr)
         val_windows.extend(va)
@@ -514,7 +600,7 @@ def main():
     manifest = {
         "profile": args.profile,
         "input_channels": input_channels,
-        "target_channels": TARGET_CHANNELS,
+        "target_channels": target_channels,
         "x_series_shape": list(x_series.shape),
         "y_series_shape": list(y_series.shape),
         "input_len": args.input_len,
@@ -525,8 +611,10 @@ def main():
         "notes": [
             "x_series/y_series are normalized with train-state statistics.",
             "Window CSVs prevent crossing location boundaries.",
-            "Targets are current-state radiation/temp maps; training Dataset uses future windows.",
-            "temperature_anomaly is computed as per-location day-of-year-bin anomaly.",
+            "Targets are current-state maps; training Dataset uses future windows.",
+            "cloudforce target shortwave_cloud_attenuation is (sun_context - all_sky_shortwave) / sun_context.",
+            "temperature_anomaly is computed as per-location day-of-year-bin anomaly when present.",
+            f"max_gap_days={args.max_gap_days}",
         ],
     }
     (out_dir / "tensor_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

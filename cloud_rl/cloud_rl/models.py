@@ -20,12 +20,12 @@ class CloudActorCritic(nn.Module):
     """Hybrid actor-critic policy.
 
     Observation uses both:
-      - obs_map: mask + scalar feature planes + target plane, [B,C,H,W]
-      - features and target again through an MLP, [B,14] and [B,1]
+      - obs_map: mask + cloud/world scalar feature planes + target plane, [B,C,H,W]
+      - features and target again through an MLP, [B,F] and [B,1]
 
     Action uses up to K tokens. Each token has:
       - categorical op: noop/remove/modify/create
-      - continuous params: x, y, radius, mass, humidity, thickness, height, type
+      - continuous params: x, y, radius, cloud_probability, aot, cirrus, layer, texture
     """
 
     def __init__(
@@ -91,23 +91,44 @@ class CloudActorCritic(nn.Module):
         out = self(obs_map, features, target_temp_norm)
         op_dist = Categorical(logits=out.op_logits)
         op = op_dist.sample()
-        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=True)
-        op_entropy = op_dist.entropy().sum(dim=1, keepdim=True)
+        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=False)
+        op_entropy = op_dist.entropy().sum(dim=1, keepdim=False)
 
         param_dist = Normal(out.param_mu, out.param_std)
         raw = param_dist.rsample()
         params = torch.tanh(raw)
         # tanh correction for log prob.
         param_log_prob = param_dist.log_prob(raw) - torch.log(1.0 - params.pow(2) + 1e-6)
-        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=True)
-        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=True)
+        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=False)
+        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=False)
 
         return {
             "op": op,
             "params": params,
-            "log_prob": op_log_prob + param_log_prob,
-            "entropy": op_entropy + param_entropy,
+            "log_prob": (op_log_prob + param_log_prob).unsqueeze(-1),
+            "entropy": (op_entropy + param_entropy).unsqueeze(-1),
             "value": out.value,
+        }
+
+    def deterministic(self, obs_map: torch.Tensor, features: torch.Tensor, target_temp_norm: torch.Tensor) -> Dict[str, torch.Tensor]:
+        out = self(obs_map, features, target_temp_norm)
+        b = out.op_logits.shape[0]
+        op = torch.zeros((b, self.max_actions), dtype=torch.long, device=out.op_logits.device)
+        visible_logits = torch.stack([out.op_logits[:, :, 1], out.op_logits[:, :, 3]], dim=-1)
+        non_noop_logits, visible_op = visible_logits.max(dim=-1)
+        best_token = non_noop_logits.argmax(dim=1)
+        row = torch.arange(b, device=out.op_logits.device)
+        use_action = non_noop_logits[row, best_token] > out.op_logits[row, best_token, 0]
+        op_ids = torch.where(visible_op[row, best_token] == 0, 1, 3)
+        op[row[use_action], best_token[use_action]] = op_ids[use_action]
+        params = torch.tanh(out.param_mu)
+        log_prob, entropy, value = self.evaluate_actions(obs_map, features, target_temp_norm, op, params)
+        return {
+            "op": op,
+            "params": params,
+            "log_prob": log_prob,
+            "entropy": entropy,
+            "value": value,
         }
 
     def evaluate_actions(
@@ -120,14 +141,14 @@ class CloudActorCritic(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         out = self(obs_map, features, target_temp_norm)
         op_dist = Categorical(logits=out.op_logits)
-        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=True)
-        op_entropy = op_dist.entropy().sum(dim=1, keepdim=True)
+        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=False)
+        op_entropy = op_dist.entropy().sum(dim=1, keepdim=False)
 
         params = params.clamp(-0.999, 0.999)
         raw = torch.atanh(params)
         param_dist = Normal(out.param_mu, out.param_std)
         param_log_prob = param_dist.log_prob(raw) - torch.log(1.0 - params.pow(2) + 1e-6)
-        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=True)
-        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=True)
+        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=False)
+        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=False)
 
-        return op_log_prob + param_log_prob, op_entropy + param_entropy, out.value
+        return (op_log_prob + param_log_prob).unsqueeze(-1), (op_entropy + param_entropy).unsqueeze(-1), out.value

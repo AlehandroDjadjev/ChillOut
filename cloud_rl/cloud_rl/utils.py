@@ -59,8 +59,8 @@ def resolve_existing_path(value: str | Path) -> Path:
     raise FileNotFoundError(f"Could not resolve existing path from {value!r}")
 
 
-def to_device(batch: Dict, device: torch.device) -> Dict:
+def to_device(batch: Dict, device: torch.device, non_blocking: bool = False) -> Dict:
     out = {}
     for k, v in batch.items():
-        out[k] = v.to(device) if torch.is_tensor(v) else v
+        out[k] = v.to(device, non_blocking=non_blocking) if torch.is_tensor(v) else v
     return out

@@ -2,4 +2,43 @@ config.js
 .env
 .DS_Store
 Thumbs.db
-dataset.out/*
+
+# Agent/editor tooling and local uploads
+.claude/
+.uploads/
+
+# Node
+node_modules/
+
+# Python/runtime noise
+__pycache__/
+*.py[cod]
+
+# Local datasets and downloaded satellite/weather artifacts
+dataset*/
+dataset_out/
+dataset.last/
+dataset.quick/
+NewModel/dataset_cloudforce_interaction/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/data/
+cloud_state_dataset/
+cloud_tensors/
+masks/
+
+# Training checkpoints and model exports
+*.pt
+*.pth
+*.ckpt
+*.onnx
+runs/
+checkpoints/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/checkpoints/
+exports/
+
+# Generated diagnostics/evaluation artifacts
+diagnostics/
+NewModel/diagnostics/
+rl_diagnostics*/
+rl_eval_outputs*/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/diagnostics/
+cloud_convlstm_dataset_aligned/cloud_aligned_pipeline/cloud_state_dataset/
