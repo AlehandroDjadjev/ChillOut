@@ -47,6 +47,22 @@ def _transform_raw_features(raw_features: torch.Tensor, raw_feature_names: Seque
     return torch.cat(columns, dim=1)
 
 
+def _align_by_names(
+    raw_features: torch.Tensor,
+    source_names: Sequence[str],
+    target_names: Sequence[str],
+) -> torch.Tensor:
+    index_by_name = {name: idx for idx, name in enumerate(source_names)}
+    columns: List[torch.Tensor] = []
+    for name in target_names:
+        index = index_by_name.get(name)
+        if index is None:
+            columns.append(torch.zeros((raw_features.shape[0], 1), dtype=raw_features.dtype, device=raw_features.device))
+        else:
+            columns.append(raw_features[:, index : index + 1])
+    return torch.cat(columns, dim=1)
+
+
 class ResBlock(nn.Module):
     def __init__(self, channels: int, dropout: float):
         super().__init__()
@@ -219,11 +235,18 @@ class CloudTempCheckpointReward(AbstractRewardModel):
 
     def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
         raw = feature_vector.float()
-        feature_names = self._resolve_feature_names(raw.shape[1])
+        source_names = self._resolve_feature_names(raw.shape[1])
         if raw.shape[1] == len(self.model_feature_names):
             processed = raw
         else:
-            processed = _transform_raw_features(raw, feature_names)
+            aligned = _align_by_names(raw, source_names, self.raw_feature_names)
+            processed = _transform_raw_features(aligned, self.raw_feature_names)
+
+        expected_dim = self.feature_mean.shape[0]
+        if processed.shape[1] < expected_dim:
+            processed = F.pad(processed, (0, expected_dim - processed.shape[1]))
+        elif processed.shape[1] > expected_dim:
+            processed = processed[:, :expected_dim]
         return (processed - self.feature_mean) / self.feature_std
 
     def _prepare_mask(self, mask: torch.Tensor) -> torch.Tensor:
