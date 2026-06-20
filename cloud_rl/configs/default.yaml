@@ -11,13 +11,13 @@ seed: 42
 policy:
   max_actions: 3
   hidden_dim: 256
-  lr: 0.0003
+  lr: 0.0001
   entropy_coef: 0.001
-  bc_coef: 0.02
+  bc_coef: 0.0
   value_coef: 0.5
   clip_eps: 0.2
-  ppo_epochs: 2
-  grad_clip: 0.5
+  ppo_epochs: 1
+  grad_clip: 0.25
   guided_random_candidates: 4
 
 training:
