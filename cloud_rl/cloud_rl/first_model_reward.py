@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .dataset import FEATURE_KEYS
 from .rewards import AbstractRewardModel
 
 
@@ -203,9 +204,26 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         for param in self.model.parameters():
             param.requires_grad_(False)
 
+    def _resolve_feature_names(self, raw_feature_count: int) -> Sequence[str]:
+        if raw_feature_count == len(self.raw_feature_names):
+            return self.raw_feature_names
+        if raw_feature_count == len(FEATURE_KEYS):
+            return FEATURE_KEYS
+        if raw_feature_count == len(self.model_feature_names):
+            return self.model_feature_names
+        raise ValueError(
+            "Feature vector width does not match the checkpoint metadata or the canonical dataset schema: "
+            f"got {raw_feature_count}, raw_feature_names={len(self.raw_feature_names)}, "
+            f"feature_keys={len(FEATURE_KEYS)}, model_feature_names={len(self.model_feature_names)}."
+        )
+
     def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
         raw = feature_vector.float()
-        processed = _transform_raw_features(raw, self.raw_feature_names)
+        feature_names = self._resolve_feature_names(raw.shape[1])
+        if raw.shape[1] == len(self.model_feature_names):
+            processed = raw
+        else:
+            processed = _transform_raw_features(raw, feature_names)
         return (processed - self.feature_mean) / self.feature_std
 
     def _prepare_mask(self, mask: torch.Tensor) -> torch.Tensor:
