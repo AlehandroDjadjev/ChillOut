@@ -3,6 +3,10 @@ config.js
 .DS_Store
 Thumbs.db
 
+# Agent/editor tooling and local uploads
+.claude/
+.uploads/
+
 # Node
 node_modules/
 
