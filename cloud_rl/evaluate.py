@@ -95,9 +95,11 @@ def main() -> None:
             sid = batch["sample_id"][0]
             save_mask(batch["original_mask"][0, 0], out_dir / f"{sid}_original.png")
             save_mask(rast["generated_mask"][0, 0], out_dir / f"{sid}_generated.png")
-            save_mask(rast["property_maps"][0, 0], out_dir / f"{sid}_humidity_norm.png")
-            save_mask(rast["property_maps"][0, 1], out_dir / f"{sid}_thickness_norm.png")
-            save_mask(rast["property_maps"][0, 2], out_dir / f"{sid}_height_norm.png")
+            save_mask(rast["property_maps"][0, 0], out_dir / f"{sid}_cloud_probability.png")
+            save_mask(rast["property_maps"][0, 1], out_dir / f"{sid}_aot_norm.png")
+            save_mask(rast["property_maps"][0, 2], out_dir / f"{sid}_cloud_layer.png")
+            save_mask(rast["property_maps"][0, 3], out_dir / f"{sid}_texture_norm.png")
+            save_mask(rast["property_maps"][0, 4], out_dir / f"{sid}_cirrus_proxy.png")
             records.append({
                 "sample_id": sid,
                 "target_temperature_c": float(batch["target_temp"][0, 0].cpu()),
@@ -109,9 +111,11 @@ def main() -> None:
                 "outputs": {
                     "original_mask": f"{sid}_original.png",
                     "generated_mask": f"{sid}_generated.png",
-                    "humidity_norm": f"{sid}_humidity_norm.png",
-                    "thickness_norm": f"{sid}_thickness_norm.png",
-                    "height_norm": f"{sid}_height_norm.png",
+                    "cloud_probability": f"{sid}_cloud_probability.png",
+                    "aot_norm": f"{sid}_aot_norm.png",
+                    "cloud_layer": f"{sid}_cloud_layer.png",
+                    "texture_norm": f"{sid}_texture_norm.png",
+                    "cirrus_proxy": f"{sid}_cirrus_proxy.png",
                 },
             })
 
