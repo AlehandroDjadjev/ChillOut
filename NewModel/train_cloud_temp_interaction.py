@@ -22,9 +22,16 @@ import json
 import math
 import os
 import random
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import numpy as np
 from PIL import Image
@@ -70,6 +77,81 @@ def can_use_torch_compile() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"Triton is not available: {exc}"
     return True, "ok"
+
+
+def resolve_resume_checkpoint(source: str, out_dir: Path, fresh: bool) -> Optional[Path]:
+    if fresh or source in {"", "none"}:
+        return None
+    if source == "auto":
+        candidate = out_dir / "last.pt"
+        return candidate if candidate.exists() else None
+
+    path = Path(source)
+    if path.is_dir():
+        candidate = path / "last.pt"
+        if candidate.exists():
+            return candidate
+        raise FileNotFoundError(f"No last.pt found under resume directory: {path}")
+    if path.exists():
+        return path
+    raise FileNotFoundError(f"Resume checkpoint not found: {path}")
+
+
+def maybe_build_dataset(args: argparse.Namespace) -> Path:
+    data_root = Path(args.data_root or args.dataset_out).resolve()
+    if not args.build_dataset:
+        if not data_root.exists():
+            raise FileNotFoundError(
+                f"Dataset root does not exist: {data_root}. "
+                "Run with --build-dataset --start-date YYYY-MM-DD --end-date YYYY-MM-DD first."
+            )
+        return data_root
+
+    if not args.start_date or not args.end_date:
+        raise ValueError("--build-dataset requires --start-date and --end-date")
+
+    builder = Path(__file__).resolve().parent / "build_temperature_dataset_cloudforce.py"
+    cmd = [
+        sys.executable,
+        str(builder),
+        "--start-date",
+        args.start_date,
+        "--end-date",
+        args.end_date,
+        "--out",
+        str(data_root),
+        "--patch-km",
+        str(args.patch_km),
+        "--resolution-m",
+        str(args.resolution_m),
+        "--max-cloud",
+        str(args.max_cloud),
+        "--max-scenes-per-location",
+        str(args.max_scenes_per_location),
+        "--s2-workers",
+        str(args.s2_workers),
+        "--openmeteo-workers",
+        str(args.openmeteo_workers),
+        "--openmeteo-retries",
+        str(args.openmeteo_retries),
+        "--openmeteo-sleep-s",
+        str(args.openmeteo_sleep_s),
+        "--target-offset-days",
+        str(args.target_offset_days),
+        "--seed",
+        str(args.seed),
+    ]
+    if args.locations_json:
+        cmd.extend(["--locations-json", args.locations_json])
+    if args.openmeteo_continue_on_fail:
+        cmd.append("--openmeteo-continue-on-fail")
+    if args.skip_torch_dataset:
+        cmd.append("--skip-torch")
+
+    print("Building dataset with:")
+    print(" ".join(cmd))
+    subprocess.run(cmd, check=True)
+    return data_root
 
 
 def load_records(data_root: Path, split: str) -> List[Dict[str, Any]]:
@@ -532,6 +614,7 @@ def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimiz
             "epoch": epoch,
             "args": vars(args),
             "raw_feature_names": metadata["raw_feature_names"],
+            "model_feature_names": metadata.get("model_feature_names", metadata["raw_feature_names"]),
             "cloud_feature_names": metadata["cloud_feature_names"],
             "world_feature_names": metadata["world_feature_names"],
             "normalizer": x_norm.state_dict(),
@@ -557,8 +640,26 @@ def save_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimiz
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-root", required=True)
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--data-root", default=None)
+    parser.add_argument("--dataset-out", default="dataset_cloudforce_interaction")
+    parser.add_argument("--build-dataset", action="store_true", help="Run build_temperature_dataset_cloudforce.py before training.")
+    parser.add_argument("--start-date", default=None, help="Dataset extraction start date, used with --build-dataset.")
+    parser.add_argument("--end-date", default=None, help="Dataset extraction end date, used with --build-dataset.")
+    parser.add_argument("--locations-json", default=None)
+    parser.add_argument("--patch-km", type=float, default=10.0)
+    parser.add_argument("--resolution-m", type=float, default=250.0)
+    parser.add_argument("--max-cloud", type=float, default=100.0)
+    parser.add_argument("--max-scenes-per-location", type=int, default=200)
+    parser.add_argument("--s2-workers", type=int, default=2)
+    parser.add_argument("--openmeteo-workers", type=int, default=1)
+    parser.add_argument("--openmeteo-retries", type=int, default=8)
+    parser.add_argument("--openmeteo-sleep-s", type=float, default=8.0)
+    parser.add_argument("--openmeteo-continue-on-fail", action="store_true")
+    parser.add_argument("--target-offset-days", type=float, default=5.0)
+    parser.add_argument("--skip-torch-dataset", action="store_true")
+    parser.add_argument("--out-dir", default="runs/cloud_temp_interaction")
+    parser.add_argument("--resume", default="auto", help="auto, none, a checkpoint path, or a run directory.")
+    parser.add_argument("--fresh", action="store_true", help="Start from scratch even if out-dir/last.pt exists.")
     parser.add_argument("--image-height", type=int, default=160)
     parser.add_argument("--image-width", type=int, default=160)
     parser.add_argument("--lookback", type=int, default=4)
@@ -596,9 +697,11 @@ def main() -> None:
         torch.backends.cudnn.benchmark = True
         torch.set_float32_matmul_precision("high")
 
-    data_root = Path(args.data_root).resolve()
+    data_root = maybe_build_dataset(args)
     out_dir = Path(args.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    resume_path = resolve_resume_checkpoint(args.resume, out_dir, args.fresh)
+    resume_state = torch.load(resume_path, map_location="cpu") if resume_path is not None else None
 
     metadata = load_metadata(data_root)
     raw_names = list(metadata["raw_feature_names"])
@@ -609,8 +712,14 @@ def main() -> None:
     val_records = load_records(data_root, "val")
     test_records = load_records(data_root, "test")
 
-    x_norm = Normalizer.fit(collect_train_feature_matrix(train_records, raw_names))
-    y_norm = TargetNormalizer.fit(get_target(r) for r in train_records)
+    if resume_state is not None:
+        x_norm = Normalizer.from_state_dict(resume_state["normalizer"])
+        y_norm = TargetNormalizer.from_state_dict(resume_state["target_normalizer"])
+        print(f"Resuming first model from {resume_path}")
+    else:
+        x_norm = Normalizer.fit(collect_train_feature_matrix(train_records, raw_names))
+        y_norm = TargetNormalizer.fit(get_target(r) for r in train_records)
+        print("Starting first model training from scratch.")
 
     train_ds = CloudTempSequenceDataset(data_root, train_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, args.augment, cache_images=args.cache_images)
     val_ds = CloudTempSequenceDataset(data_root, val_records, raw_names, cloud_names, world_names, x_norm, y_norm, args.image_height, args.image_width, args.lookback, args.max_gap_days, False, cache_images=args.cache_images)
@@ -652,6 +761,31 @@ def main() -> None:
             print("[WARN] Continue in eager mode. Remove --compile to hide this warning.")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    start_epoch = 1
+    best_mae = float("inf")
+    history = []
+    if resume_state is not None:
+        model.load_state_dict(resume_state["model_state"])
+        if "optimizer_state" in resume_state:
+            optimizer.load_state_dict(resume_state["optimizer_state"])
+        start_epoch = int(resume_state.get("epoch", 0)) + 1
+        history_path = out_dir / "history.json"
+        if history_path.exists():
+            try:
+                history = list(json.loads(history_path.read_text(encoding="utf-8")).get("history", []))
+            except Exception:
+                history = []
+        best_path = out_dir / "best.pt"
+        if best_path.exists():
+            try:
+                best_state = torch.load(best_path, map_location="cpu")
+                best_mae = float(best_state.get("metrics", {}).get("val", {}).get("mae_c", float("inf")))
+            except Exception:
+                best_mae = float("inf")
+        if start_epoch > args.epochs:
+            print(f"Checkpoint is already at epoch {start_epoch - 1}; configured --epochs is {args.epochs}.")
+            return
+
     loss_fn = nn.SmoothL1Loss(beta=0.75)
     amp_dtype = torch.bfloat16 if args.amp_dtype == "bf16" else torch.float16
     scaler = GradScaler("cuda", enabled=(args.amp_dtype == "fp16" and device.type == "cuda"))
@@ -674,10 +808,7 @@ def main() -> None:
         "cache_images": args.cache_images,
     }, indent=2))
 
-    best_mae = float("inf")
-    history = []
-
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         total = 0
         total_loss = 0.0

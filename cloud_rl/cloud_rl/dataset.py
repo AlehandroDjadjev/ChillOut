@@ -35,6 +35,11 @@ DEFAULT_FEATURE_STD = np.array(
     dtype=np.float32,
 )
 
+DEFAULT_FEATURE_STATS = {
+    name: (float(mean), float(std))
+    for name, mean, std in zip(FEATURE_KEYS, DEFAULT_FEATURE_MEAN, DEFAULT_FEATURE_STD)
+}
+
 SKIP_JSON_NAMES = {
     "stats.json",
     "metadata.json",
@@ -123,6 +128,26 @@ def load_binary_mask(path: Path, size_hw: Tuple[int, int]) -> torch.Tensor:
     return torch.from_numpy(arr)[None, :, :]
 
 
+def load_feature_keys(data_root: Path) -> List[str]:
+    metadata_path = data_root / "metadata.json"
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        for key in ("raw_feature_names", "feature_keys", "model_feature_names"):
+            names = metadata.get(key)
+            if names:
+                return list(names)
+    return list(FEATURE_KEYS)
+
+
+def default_stats_for_keys(feature_keys: Sequence[str]) -> Tuple[np.ndarray, np.ndarray]:
+    means, stds = [], []
+    for name in feature_keys:
+        mean, std = DEFAULT_FEATURE_STATS.get(name, (0.0, 1.0))
+        means.append(mean)
+        stds.append(std)
+    return np.asarray(means, dtype=np.float32), np.asarray(stds, dtype=np.float32)
+
+
 def extract_feature_vector(sample: Dict, feature_keys: Sequence[str] = FEATURE_KEYS) -> np.ndarray:
     if "feature_vector" in sample and len(sample["feature_vector"]) == len(feature_keys):
         return np.asarray(sample["feature_vector"], dtype=np.float32)
@@ -130,13 +155,99 @@ def extract_feature_vector(sample: Dict, feature_keys: Sequence[str] = FEATURE_K
     return np.asarray([float(inputs.get(k, np.nan)) for k in feature_keys], dtype=np.float32)
 
 
+def parse_sample_datetime(sample: Dict) -> np.datetime64:
+    raw = str(sample.get("anchor") or sample.get("date") or "").replace("Z", "")
+    if "+" in raw:
+        raw = raw.split("+", 1)[0]
+    if not raw:
+        return np.datetime64("1970-01-01")
+    return np.datetime64(raw)
+
+
+def sample_location_key(sample: Dict) -> str:
+    return str(sample.get("location") or sample.get("city") or "")
+
+
+def current_temperature_c(sample: Dict) -> float:
+    value = sample.get("current_temperature_c")
+    if value is not None:
+        return float(value)
+    inputs = sample.get("inputs") or {}
+    if "world_temperature_2m" in inputs:
+        return float(inputs["world_temperature_2m"])
+    return float(sample.get("target_temperature_c", sample.get("target", 20.0)))
+
+
+def target_offset_days(sample: Dict) -> float:
+    value = sample.get("target_offset_days")
+    if value is not None:
+        try:
+            return float(value)
+        except Exception:
+            pass
+    if sample.get("target_timestamp") and (sample.get("anchor") or sample.get("date")):
+        try:
+            target_dt = np.datetime64(str(sample["target_timestamp"]).replace("Z", ""))
+            anchor_dt = np.datetime64(str(sample.get("anchor") or sample.get("date")).replace("Z", ""))
+            return float((target_dt - anchor_dt) / np.timedelta64(1, "D"))
+        except Exception:
+            pass
+    return 5.0
+
+
+def days_between(a: Dict, b: Dict) -> float:
+    try:
+        return float((parse_sample_datetime(a) - parse_sample_datetime(b)) / np.timedelta64(1, "D"))
+    except Exception:
+        return 0.0
+
+
+def build_trend_features(records: Sequence[Dict]) -> np.ndarray:
+    last = records[-1]
+    temps = np.asarray([current_temperature_c(r) for r in records], dtype=np.float32)
+    days = np.asarray([days_between(r, last) for r in records], dtype=np.float32)
+    step_temp = np.zeros_like(temps, dtype=np.float32)
+    step_days = np.zeros_like(days, dtype=np.float32)
+    if len(temps) > 1:
+        step_temp[1:] = temps[1:] - temps[:-1]
+        step_days[1:] = np.maximum(0.0, days[1:] - days[:-1])
+    return np.stack([temps - temps[-1], days, step_temp, step_days], axis=1).astype(np.float32) / 10.0
+
+
+def build_sample_windows(
+    samples: Sequence[Tuple[Dict, Path]],
+    lookback: int,
+    max_gap_days: float,
+) -> List[List[Tuple[Dict, Path]]]:
+    if lookback <= 1:
+        return [[item] for item in samples]
+
+    by_loc: Dict[str, List[Tuple[Dict, Path]]] = {}
+    for item in samples:
+        by_loc.setdefault(sample_location_key(item[0]), []).append(item)
+
+    max_gap = np.timedelta64(int(round(max_gap_days * 24)), "h")
+    windows: List[List[Tuple[Dict, Path]]] = []
+    for rows in by_loc.values():
+        rows.sort(key=lambda item: parse_sample_datetime(item[0]))
+        for i in range(lookback - 1, len(rows)):
+            chunk = rows[i - lookback + 1 : i + 1]
+            if all(
+                parse_sample_datetime(b[0]) - parse_sample_datetime(a[0]) <= max_gap
+                for a, b in zip(chunk[:-1], chunk[1:])
+            ):
+                windows.append(chunk)
+    return windows
+
+
 def compute_stats(
     data_root: str | Path,
-    feature_keys: Sequence[str] = FEATURE_KEYS,
+    feature_keys: Optional[Sequence[str]] = None,
     split: Optional[str] = "train",
     manifest_path: Optional[str | Path] = None,
 ) -> Dict[str, List[float]]:
     root = Path(data_root)
+    resolved_feature_keys = list(feature_keys) if feature_keys is not None else load_feature_keys(root)
     source = discover_sample_sources(root, split=split, manifest_path=Path(manifest_path) if manifest_path else None)
     samples = []
     for item in source:
@@ -144,13 +255,13 @@ def compute_stats(
 
     xs, ts = [], []
     for sample in samples:
-        x = extract_feature_vector(sample, feature_keys)
+        x = extract_feature_vector(sample, resolved_feature_keys)
         if np.isfinite(x).all():
             xs.append(x)
         ts.append(float(sample.get("target_temperature_c", 20.0)))
 
     if not xs:
-        mean, std = DEFAULT_FEATURE_MEAN, DEFAULT_FEATURE_STD
+        mean, std = default_stats_for_keys(resolved_feature_keys)
     else:
         mat = np.stack(xs).astype(np.float32)
         mean = mat.mean(axis=0)
@@ -159,7 +270,7 @@ def compute_stats(
 
     t = np.asarray(ts, dtype=np.float32)
     return {
-        "feature_keys": list(feature_keys),
+        "feature_keys": list(resolved_feature_keys),
         "feature_mean": mean.tolist(),
         "feature_std": std.tolist(),
         "target_temp_mean": [float(t.mean()) if len(t) else 20.0],
@@ -185,10 +296,13 @@ class CloudFolderDataset(Dataset):
         include_feature_planes: bool = True,
         split: Optional[str] = "train",
         manifest_path: Optional[str | Path] = None,
+        lookback: int = 1,
+        max_gap_days: float = 12.0,
     ) -> None:
         self.data_root = Path(data_root)
         self.image_size = image_size
         self.include_feature_planes = include_feature_planes
+        self.feature_keys = load_feature_keys(self.data_root)
         self.manifest_sources = discover_sample_sources(
             self.data_root,
             split=split,
@@ -200,6 +314,14 @@ class CloudFolderDataset(Dataset):
                 self.samples.append((sample, source))
         if not self.samples:
             raise FileNotFoundError(f"No usable samples found in {self.data_root}")
+        self.lookback = max(1, int(lookback))
+        self.max_gap_days = float(max_gap_days)
+        self.windows = build_sample_windows(self.samples, self.lookback, self.max_gap_days)
+        if not self.windows:
+            raise FileNotFoundError(
+                f"No usable lookback windows found in {self.data_root}; "
+                f"lookback={self.lookback}, max_gap_days={self.max_gap_days}"
+            )
 
         stats = None
         if stats_path is not None and Path(stats_path).exists():
@@ -208,11 +330,16 @@ class CloudFolderDataset(Dataset):
             stats = json.loads((self.data_root / "stats.json").read_text(encoding="utf-8"))
 
         if stats is None:
-            self.feature_mean = DEFAULT_FEATURE_MEAN
-            self.feature_std = DEFAULT_FEATURE_STD
+            self.feature_mean, self.feature_std = default_stats_for_keys(self.feature_keys)
             self.target_mean = 20.0
             self.target_std = 10.0
         else:
+            stats_feature_keys = list(stats.get("feature_keys") or self.feature_keys)
+            if stats_feature_keys != self.feature_keys:
+                raise ValueError(
+                    "stats.json feature_keys do not match dataset metadata feature names. "
+                    "Regenerate stats with train_rl.py --write-stats for this dataset."
+                )
             self.feature_mean = np.asarray(stats["feature_mean"], dtype=np.float32)
             self.feature_std = np.asarray(stats["feature_std"], dtype=np.float32)
             self.target_mean = float(stats["target_temp_mean"][0])
@@ -220,32 +347,59 @@ class CloudFolderDataset(Dataset):
 
         self.feature_std = np.where(self.feature_std < 1e-6, 1.0, self.feature_std)
         self.target_std = max(self.target_std, 1e-6)
+        # Policy state includes the latest normalized raw feature vector plus the
+        # v6 trend sequence, current-temp anchor, and target offset. The reward
+        # still receives raw feature tensors separately.
+        self.policy_feature_dim = len(self.feature_keys) + self.lookback * 4 + 2
+        self.feature_dim = self.policy_feature_dim
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.windows)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor | str | Dict]:
-        sample, source = self.samples[idx]
-        mask_path = resolve_mask_path(self.data_root, source, sample["mask_path"])
-        mask = load_binary_mask(mask_path, self.image_size)
+        window = self.windows[idx]
+        sample, source = window[-1]
+        masks = []
+        raw_sequence = []
+        for row, row_source in window:
+            mask_path = resolve_mask_path(self.data_root, row_source, row["mask_path"])
+            masks.append(load_binary_mask(mask_path, self.image_size))
+            raw = extract_feature_vector(row, self.feature_keys)
+            raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+            raw_sequence.append(raw)
 
-        raw_features = extract_feature_vector(sample)
-        raw_features = np.nan_to_num(raw_features, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-        norm_features = (raw_features - self.feature_mean) / self.feature_std
+        raw_features = raw_sequence[-1]
+        raw_feature_sequence = np.stack(raw_sequence, axis=0).astype(np.float32)
+        norm_sequence = (raw_feature_sequence - self.feature_mean) / self.feature_std
+        norm_features = norm_sequence[-1]
+        trend = build_trend_features([row for row, _ in window])
+        if trend.shape[0] != self.lookback:
+            pad = np.repeat(trend[:1], self.lookback - trend.shape[0], axis=0)
+            trend = np.concatenate([pad, trend], axis=0)
 
-        target = float(sample.get("target_temperature_c", 20.0))
+        target = float(sample.get("target_temperature_c", sample.get("target", 20.0)))
+        current = current_temperature_c(sample)
         target_norm = np.asarray([(target - self.target_mean) / self.target_std], dtype=np.float32)
+        current_norm = np.asarray([(current - self.target_mean) / self.target_std], dtype=np.float32)
+        offset_norm = np.asarray([target_offset_days(sample) / 10.0], dtype=np.float32)
+        policy_features = np.concatenate([norm_features, trend.reshape(-1), current_norm, offset_norm]).astype(np.float32)
 
         h, w = self.image_size
-        feature_planes = torch.from_numpy(norm_features).float()[:, None, None].expand(-1, h, w)
+        mask_sequence = torch.stack(masks, dim=0).float()
+        mask = mask_sequence[-1]
+        feature_planes = torch.from_numpy(policy_features).float()[:, None, None].expand(-1, h, w)
         target_plane = torch.full((1, h, w), float(target_norm[0]), dtype=torch.float32)
         obs_map = torch.cat([mask, feature_planes, target_plane], dim=0)
 
         return {
             "obs_map": obs_map.float(),
             "original_mask": mask.float(),
-            "features": torch.from_numpy(norm_features).float(),
+            "original_mask_sequence": mask_sequence,
+            "features": torch.from_numpy(policy_features).float(),
             "raw_features": torch.from_numpy(raw_features).float(),
+            "raw_feature_sequence": torch.from_numpy(raw_feature_sequence).float(),
+            "trend_features": torch.from_numpy(trend).float(),
+            "current_temp": torch.tensor([current], dtype=torch.float32),
             "target_temp": torch.tensor([target], dtype=torch.float32),
             "target_temp_norm": torch.from_numpy(target_norm).float(),
             "sample_id": str(sample.get("sample_id", f"sample_{idx}")),
@@ -256,7 +410,18 @@ class CloudFolderDataset(Dataset):
 
 def collate_cloud_batch(batch: List[Dict]) -> Dict:
     out: Dict = {}
-    tensor_keys = ["obs_map", "original_mask", "features", "raw_features", "target_temp", "target_temp_norm"]
+    tensor_keys = [
+        "obs_map",
+        "original_mask",
+        "original_mask_sequence",
+        "features",
+        "raw_features",
+        "raw_feature_sequence",
+        "trend_features",
+        "current_temp",
+        "target_temp",
+        "target_temp_norm",
+    ]
     for key in tensor_keys:
         out[key] = torch.stack([item[key] for item in batch], dim=0)
     out["sample_id"] = [item["sample_id"] for item in batch]

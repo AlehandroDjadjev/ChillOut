@@ -33,6 +33,7 @@ def ppo_update(
     clip_eps: float = 0.2,
     value_coef: float = 0.5,
     entropy_coef: float = 0.01,
+    bc_coef: float = 0.0,
     grad_clip: float = 0.5,
 ) -> Dict[str, float]:
     log_prob, entropy, value = model.evaluate_actions(
@@ -44,9 +45,10 @@ def ppo_update(
     surr1 = ratio * adv
     surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
     policy_loss = -torch.min(surr1, surr2).mean()
+    bc_loss = -log_prob.mean()
     value_loss = F.mse_loss(value, batch.returns)
     entropy_bonus = entropy.mean()
-    loss = policy_loss + value_coef * value_loss - entropy_coef * entropy_bonus
+    loss = policy_loss + value_coef * value_loss + bc_coef * bc_loss - entropy_coef * entropy_bonus
 
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
@@ -57,6 +59,7 @@ def ppo_update(
     return {
         "loss": float(loss.detach().cpu()),
         "policy_loss": float(policy_loss.detach().cpu()),
+        "bc_loss": float(bc_loss.detach().cpu()),
         "value_loss": float(value_loss.detach().cpu()),
         "entropy": float(entropy_bonus.detach().cpu()),
         "approx_kl": float(approx_kl.cpu()),

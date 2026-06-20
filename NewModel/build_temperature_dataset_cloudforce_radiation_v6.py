@@ -54,11 +54,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-os.environ.setdefault("OMP_NUM_THREADS", "1")
-os.environ.setdefault("MKL_NUM_THREADS", "1")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
-
 try:
     from dotenv import load_dotenv
 except Exception:
@@ -618,6 +613,82 @@ def world_features_from_row(row: Dict[str, float]) -> Dict[str, float]:
     }
 
 
+
+def solar_clear_sky_proxy_wm2(lat: float, lon: float, dt: datetime) -> float:
+    """Simple clear-sky shortwave proxy.
+
+    It is not a full radiative-transfer model. It gives a physically grounded
+    daylight-scale reference so the cloud target can be:
+
+        cloud_radiative_loss = clear_sky_proxy - observed_shortwave
+
+    This makes the target much more cloud-centered than raw future temperature.
+    """
+    dt = dt.astimezone(timezone.utc)
+    day = int(dt.strftime("%j"))
+    hour = dt.hour + dt.minute / 60.0 + dt.second / 3600.0
+
+    # NOAA-style approximation.
+    gamma = 2.0 * math.pi / 365.0 * (day - 1 + (hour - 12.0) / 24.0)
+    decl = (
+        0.006918
+        - 0.399912 * math.cos(gamma)
+        + 0.070257 * math.sin(gamma)
+        - 0.006758 * math.cos(2 * gamma)
+        + 0.000907 * math.sin(2 * gamma)
+        - 0.002697 * math.cos(3 * gamma)
+        + 0.001480 * math.sin(3 * gamma)
+    )
+    eqtime = 229.18 * (
+        0.000075
+        + 0.001868 * math.cos(gamma)
+        - 0.032077 * math.sin(gamma)
+        - 0.014615 * math.cos(2 * gamma)
+        - 0.040849 * math.sin(2 * gamma)
+    )
+
+    true_solar_time_min = hour * 60.0 + eqtime + 4.0 * lon
+    hour_angle = math.radians(true_solar_time_min / 4.0 - 180.0)
+    lat_rad = math.radians(lat)
+
+    cos_zenith = (
+        math.sin(lat_rad) * math.sin(decl)
+        + math.cos(lat_rad) * math.cos(decl) * math.cos(hour_angle)
+    )
+    if cos_zenith <= 0.0:
+        return 0.0
+
+    # Extraterrestrial correction + clear-sky transmittance proxy.
+    ecc = 1.0 + 0.033 * math.cos(2.0 * math.pi * day / 365.0)
+    toa = 1361.0 * ecc * cos_zenith
+    clear = toa * 0.72
+    return float(max(0.0, clear))
+
+
+def radiation_targets_from_shortwave(loc: Location, timestamp: datetime, observed_shortwave_wm2: float) -> Dict[str, float]:
+    clear = solar_clear_sky_proxy_wm2(loc.lat, loc.lon, timestamp)
+    observed = float(observed_shortwave_wm2)
+    daylight = 1.0 if clear >= 50.0 else 0.0
+
+    if daylight > 0:
+        transmission = max(0.0, min(1.5, observed / max(clear, 1e-6)))
+        attenuation = max(-0.5, min(1.2, 1.0 - transmission))
+        loss = max(-250.0, min(1200.0, clear - observed))
+    else:
+        transmission = 1.0
+        attenuation = 0.0
+        loss = 0.0
+
+    return {
+        "radiation_shortwave_observed_wm2": observed,
+        "radiation_clear_sky_proxy_wm2": clear,
+        "radiation_cloud_loss_wm2": loss,
+        "radiation_cloud_attenuation": attenuation,
+        "radiation_cloud_transmission": transmission,
+        "radiation_daylight_valid": daylight,
+    }
+
+
 def split_records(records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
     # Date split to avoid same-day leakage across cities.
     dates = sorted({str(r["date"]) for r in records})
@@ -683,7 +754,7 @@ def main() -> int:
     parser.add_argument("--resolution-m", type=float, default=250.0)
     parser.add_argument("--max-cloud", type=float, default=100.0)
     parser.add_argument("--max-scenes-per-location", type=int, default=200)
-    parser.add_argument("--s2-workers", type=int, default=2)
+    parser.add_argument("--s2-workers", type=int, default=8)
     parser.add_argument("--openmeteo-workers", type=int, default=1, help="Use 1 for Open-Meteo free API safety. Higher can hit 429.")
     parser.add_argument("--openmeteo-retries", type=int, default=8)
     parser.add_argument("--openmeteo-sleep-s", type=float, default=8.0, help="Sleep before each uncached Open-Meteo request.")
@@ -802,6 +873,8 @@ def main() -> int:
             return None
 
         world_features = world_features_from_row(weather_now)
+        radiation_targets = radiation_targets_from_shortwave(loc, ts, float(weather_now.get("shortwave_radiation", 0.0)))
+        target_radiation_targets = radiation_targets_from_shortwave(loc, target_ts, float(weather_target.get("shortwave_radiation", 0.0)))
         inputs = {**cloud_features, **world_features}
 
         if any(name not in inputs or not math.isfinite(float(inputs[name])) for name in RAW_FEATURE_NAMES):
@@ -829,6 +902,15 @@ def main() -> int:
             "feature_vector": [float(inputs[name]) for name in RAW_FEATURE_NAMES],
             "current_temperature_c": float(weather_now["temperature_2m"]),
             TARGET_FIELD: target_temp,
+            # Radiation-centered cloud targets at the Sentinel-2 scene time.
+            # These are the targets that should be most directly controlled by clouds.
+            **radiation_targets,
+            "target_radiation_shortwave_observed_wm2": float(target_radiation_targets["radiation_shortwave_observed_wm2"]),
+            "target_radiation_clear_sky_proxy_wm2": float(target_radiation_targets["radiation_clear_sky_proxy_wm2"]),
+            "target_radiation_cloud_loss_wm2": float(target_radiation_targets["radiation_cloud_loss_wm2"]),
+            "target_radiation_cloud_attenuation": float(target_radiation_targets["radiation_cloud_attenuation"]),
+            "target_radiation_cloud_transmission": float(target_radiation_targets["radiation_cloud_transmission"]),
+            "target_radiation_daylight_valid": float(target_radiation_targets["radiation_daylight_valid"]),
             "source_notes": {
                 "mask": "Sentinel-2 SCL/CLP cloud-only mask; non-cloud pixels are black.",
                 "cloud_features": "Derived from the Sentinel-2 cloud-only tensor, not Open-Meteo cloud cover.",
@@ -859,6 +941,15 @@ def main() -> int:
     metadata = {
         "target": TARGET_FIELD,
         "target_description": f"temperature_2m at anchor + {args.target_offset_days} days",
+        "radiation_targets": [
+            "radiation_cloud_loss_wm2",
+            "radiation_cloud_attenuation",
+            "radiation_cloud_transmission",
+            "radiation_shortwave_observed_wm2",
+            "radiation_clear_sky_proxy_wm2",
+            "radiation_daylight_valid"
+        ],
+        "radiation_target_description": "Scene-time shortwave cloud effect derived from Open-Meteo shortwave radiation and a simple solar clear-sky proxy.",
         "raw_feature_names": RAW_FEATURE_NAMES,
         "model_feature_names": RAW_FEATURE_NAMES,
         "cloud_feature_names": CLOUD_FEATURE_NAMES,

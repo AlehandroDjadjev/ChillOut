@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChillOut Model Tests</title>
+  <style>
+    :root{--bg:#eef4f1;--ink:#14211c;--muted:#60706a;--line:#cfdbd6;--card:#fbfdfa;--hot:#d95f32;--cool:#1d83a8;--green:#23845f;--soft:#e4eee9}
+    *{box-sizing:border-box}body{margin:0;font-family:Bahnschrift,"Aptos Display","Segoe UI",sans-serif;background:radial-gradient(circle at 20% 0,#dcece5 0 24%,transparent 25%),linear-gradient(135deg,#f7faf2,#e8f1f3 55%,#f3efe7);color:var(--ink)}button,select,input{font:inherit}.shell{min-height:100vh;display:grid;grid-template-columns:260px 1fr}.side{position:sticky;top:0;height:100vh;padding:18px;background:#10211bcc;color:#edf7f2;backdrop-filter:blur(12px)}.brand{font-size:26px;font-weight:900;letter-spacing:.02em;margin:0}.side p{color:#b9cbc3;font-size:13px;line-height:1.45}.tabs{display:grid;gap:9px;margin-top:22px}.tab{border:1px solid #3d5c51;background:#18352c;color:#dff0e9;text-align:left;border-radius:8px;padding:12px;cursor:pointer}.tab strong{display:block}.tab span{display:block;color:#adc2ba;font-size:12px;margin-top:3px}.tab.active{background:#f3fbf6;color:#10211b;border-color:#f3fbf6}.tab.active span{color:#4d625a}.content{padding:22px;max-width:1280px}.top{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:end;margin-bottom:14px}.top h1{margin:0;font-size:28px}.top p{margin:5px 0 0;color:var(--muted)}.controls{display:grid;grid-template-columns:180px 170px 130px;gap:10px}.control{display:grid;gap:5px;font-size:12px;font-weight:800;color:#40534b}.control select,.control input,.control button{height:40px;border:1px solid var(--line);border-radius:8px;background:#fff;padding:0 10px}.control button{background:var(--green);color:white;border:0;font-weight:900;cursor:pointer}.panel{background:rgba(255,255,255,.75);border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 18px 50px #2d46371a}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid3{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}.viewer{display:grid;gap:10px}.frame{position:relative;aspect-ratio:16/10;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#d8e5df}.frame img,.frame canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.frame.mask{background:#020706}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}.kpi{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}.kpi small{display:block;color:var(--muted);font-weight:800}.kpi b{display:block;font-size:22px;margin-top:4px}.bars{display:grid;gap:8px}.bar{display:grid;grid-template-columns:170px 1fr 76px;gap:8px;align-items:center;font-size:13px}.track{height:9px;border-radius:99px;background:#d9e5df;overflow:hidden}.fill{height:100%;background:linear-gradient(90deg,var(--cool),var(--green),var(--hot));border-radius:99px}.test{display:none}.test.active{display:block}.status{min-height:20px;margin:10px 0;color:var(--muted);font-size:13px}.err{color:#b42318}.slider{display:grid;gap:7px;margin:6px 0 14px}.slider input{width:100%}.scenario{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.scenario button{height:40px;border-radius:8px;border:1px solid var(--line);background:white;cursor:pointer}.scenario button.active{background:#14211c;color:white}.gallery{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.sample{border:1px solid var(--line);border-radius:8px;background:#fff;overflow:hidden;cursor:pointer}.sample img{width:100%;aspect-ratio:1.25;object-fit:cover;background:#030604;display:block}.sample div{padding:8px;font-size:12px}.sample b{display:block;font-size:13px}.split{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}.split .kpi{cursor:pointer}.split .kpi.active{outline:3px solid #23845f33}.note{color:var(--muted);font-size:13px;line-height:1.45}.pill{display:inline-block;padding:5px 8px;border-radius:99px;background:var(--soft);font-size:12px;font-weight:800;color:#40534b;margin:0 5px 5px 0}@media(max-width:900px){.shell{display:block}.side{position:static;height:auto}.content{padding:14px}.top,.grid2,.grid3{display:block}.controls,.kpis,.scenario,.split,.gallery{grid-template-columns:1fr}.panel,.viewer{margin-bottom:12px}.bar{grid-template-columns:1fr}.side p{margin-bottom:0}}
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <h1 class="brand">ChillOut Lab</h1>
+      <p>Three simple tests for showing what the project pipeline can do: replay the model input, edit clouds interactively, and audit train/val/test samples.</p>
+      <nav class="tabs">
+        <button class="tab active" data-test="replay"><strong>1. Dataset Replay</strong><span>See exactly what the model receives.</span></button>
+        <button class="tab" data-test="counter"><strong>2. Cloud Counterfactual</strong><span>Change cloud strength and watch features move.</span></button>
+        <button class="tab" data-test="audit"><strong>3. Split Audit</strong><span>Browse train / val / test coverage.</span></button>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <div class="top">
+        <div>
+          <h1 id="title">Dataset Replay</h1>
+          <p id="subtitle">A random-friendly view of the real city/day sample: satellite scene, cloud mask, target temperature, and feature vector.</p>
+        </div>
+        <div class="controls">
+          <label class="control">Destination<select id="city"></select></label>
+          <label class="control">Date<input id="date" type="date"></label>
+          <label class="control">&nbsp;<button id="run">Load</button></label>
+        </div>
+      </div>
+
+      <div class="status" id="status">loading dataset...</div>
+
+      <section class="test active" id="replay">
+        <div class="grid3">
+          <div class="panel viewer">
+            <b>Real scene and cloud tensor</b>
+            <div class="grid2">
+              <div><div class="note">Satellite scene</div><div class="frame"><img id="scene" alt="satellite scene"></div></div>
+              <div><div class="note">Sentinel-2 cloud mask</div><div class="frame mask"><img id="mask" alt="cloud mask"></div></div>
+            </div>
+          </div>
+          <div class="panel">
+            <b>Model target</b>
+            <div class="kpis">
+              <div class="kpi"><small>Target temp</small><b id="targetTemp">--</b></div>
+              <div class="kpi"><small>Cloud cover</small><b id="cloudCover">--</b></div>
+              <div class="kpi"><small>Radiation</small><b id="radiation">--</b></div>
+              <div class="kpi"><small>Humidity</small><b id="humidity">--</b></div>
+            </div>
+            <p class="note">This test is the "is the training sample real?" view: no model magic, just the exact aligned sample the training code consumes.</p>
+            <div id="sourceNotes"></div>
+          </div>
+        </div>
+        <div class="panel" style="margin-top:14px">
+          <b>Feature vector</b>
+          <div class="bars" id="features"></div>
+        </div>
+      </section>
+
+      <section class="test" id="counter">
+        <div class="grid3">
+          <div class="panel viewer">
+            <b>Interactive cloud edit</b>
+            <div class="scenario">
+              <button class="mode active" data-mode="more">More cloud</button>
+              <button class="mode" data-mode="less">Less cloud</button>
+              <button class="mode" data-mode="shift">Shift cloud</button>
+              <button class="mode" data-mode="focus">Focused blob</button>
+            </div>
+            <label class="slider">Strength <span id="strengthOut">60%</span><input id="strength" type="range" min="0" max="100" value="60"></label>
+            <div class="grid2">
+              <div><div class="note">Before</div><div class="frame"><canvas id="beforeCanvas"></canvas></div></div>
+              <div><div class="note">After</div><div class="frame"><canvas id="afterCanvas"></canvas></div></div>
+            </div>
+          </div>
+          <div class="panel">
+            <b>Feature movement</b>
+            <div class="kpis" id="counterKpis"></div>
+            <p class="note">This represents the RL action idea visually: keep the place/date fixed, alter only the cloud field, then inspect whether temperature-related features move in a sensible direction.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="test" id="audit">
+        <div class="panel">
+          <b>Train / validation / test coverage</b>
+          <div class="split" id="splitCards"></div>
+          <p class="note">This test makes the ML setup visible. A good demo should prove the model is not only showing one cherry-picked sample.</p>
+        </div>
+        <div class="panel" style="margin-top:14px">
+          <b id="galleryTitle">Test samples</b>
+          <div class="gallery" id="gallery"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const $=id=>document.getElementById(id);
+    const state={records:[],splits:{},byCity:new Map(),rec:null,scene:null,mask:null,mode:"more",split:"test",urls:[]};
+    const cityBox=$("city"),dateBox=$("date"),status=$("status");
+    const featureRanges={s5p_cloud_fraction:[0,1],s5p_cloud_optical_thickness:[0,60],s5p_cloud_top_height_m:[0,12000],s5p_cloud_top_pressure_pa:[50000,100000],s5p_aerosol_index:[-2,4],s3_humidity_pct:[0,100],s3_sea_level_pressure_hpa:[980,1035],s3_water_vapour_kg_m2:[0,50],wind_speed_10m_mean:[0,25],wind_direction_10m_dominant:[0,360],shortwave_radiation_sum:[0,35],precipitation_sum:[0,25],cloud_cover_mean:[0,100],surface_pressure_mean:[950,1030]};
+    const labels={s5p_cloud_fraction:"S5P cloud fraction",s5p_cloud_optical_thickness:"Cloud thickness",s5p_cloud_top_height_m:"Cloud top height",s5p_cloud_top_pressure_pa:"Cloud top pressure",s5p_aerosol_index:"Aerosol index",s3_humidity_pct:"Humidity",s3_sea_level_pressure_hpa:"Sea level pressure",s3_water_vapour_kg_m2:"Water vapour",wind_speed_10m_mean:"Wind speed",wind_direction_10m_dominant:"Wind direction",shortwave_radiation_sum:"Shortwave radiation",precipitation_sum:"Precipitation",cloud_cover_mean:"Cloud cover",surface_pressure_mean:"Surface pressure"};
+    const units={s5p_cloud_fraction:"",s5p_cloud_optical_thickness:"",s5p_cloud_top_height_m:"m",s5p_cloud_top_pressure_pa:"Pa",s5p_aerosol_index:"",s3_humidity_pct:"%",s3_sea_level_pressure_hpa:"hPa",s3_water_vapour_kg_m2:"kg/m2",wind_speed_10m_mean:"m/s",wind_direction_10m_dominant:"deg",shortwave_radiation_sum:"kWh/m2",precipitation_sum:"mm",cloud_cover_mean:"%",surface_pressure_mean:"hPa"};
+    const copy={replay:["Dataset Replay","A random-friendly view of the real city/day sample: satellite scene, cloud mask, target temperature, and feature vector."],counter:["Cloud Counterfactual","Interactively add, remove, shift, or focus cloud cover over the same sample."],audit:["Split Audit","Browse train, validation, and test samples so the training setup is visible."]};
+
+    init().catch(showError);
+
+    async function init(){
+      const [all,train,val,test]=await Promise.all([
+        fetchText("/dataset_out/dataset.jsonl"),
+        fetchText("/dataset_out/splits/train.jsonl"),
+        fetchText("/dataset_out/splits/val.jsonl"),
+        fetchText("/dataset_out/splits/test.jsonl")
+      ]);
+      state.records=parseJsonl(all);
+      state.splits={train:parseJsonl(train),val:parseJsonl(val),test:parseJsonl(test)};
+      for(const rec of state.records){
+        const key=rec.city.toLowerCase();
+        if(!state.byCity.has(key))state.byCity.set(key,[]);
+        state.byCity.get(key).push(rec);
+      }
+      cityBox.innerHTML=[...state.byCity.keys()].sort().map(c=>`<option value="${c}">${title(c)}</option>`).join("");
+      cityBox.onchange=syncDates;$("run").onclick=loadSelected;$("strength").oninput=renderCounter;
+      document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>setTest(b.dataset.test));
+      document.querySelectorAll(".mode").forEach(b=>b.onclick=()=>{state.mode=b.dataset.mode;document.querySelectorAll(".mode").forEach(x=>x.classList.toggle("active",x===b));renderCounter()});
+      syncDates();renderSplitCards();await loadSelected();setStatus("ready");
+    }
+
+    function setTest(id){
+      document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.test===id));
+      document.querySelectorAll(".test").forEach(s=>s.classList.toggle("active",s.id===id));
+      $("title").textContent=copy[id][0];$("subtitle").textContent=copy[id][1];
+      if(id==="counter")renderCounter();
+      if(id==="audit")renderGallery();
+    }
+
+    function syncDates(){
+      const rows=(state.byCity.get(cityBox.value)||[]).sort((a,b)=>a.date.localeCompare(b.date));
+      dateBox.min=rows[0]?.date||"";dateBox.max=rows.at(-1)?.date||"";dateBox.value=rows.at(-1)?.date||"";
+    }
+
+    async function loadSelected(){
+      setStatus("loading sample...");
+      const rows=state.byCity.get(cityBox.value)||[];
+      state.rec=rows.find(r=>r.date===dateBox.value)||rows.at(-1);
+      if(!state.rec)throw new Error("No sample found.");
+      $("mask").src=maskUrl(state.rec);
+      state.mask=await loadImage(maskUrl(state.rec));
+      const src=await sceneSource(state.rec);
+      $("scene").src=src;
+      state.scene=await loadImage(src);
+      renderReplay();renderCounter();setStatus(`${state.rec.city} ${state.rec.date} loaded`);
+    }
+
+    async function sceneSource(rec){
+      const body={source:"sentinel2",field:"natural_color",width:768,height:480,item:{date:rec.date,bbox:rec.bbox},bbox:rec.bbox};
+      const r=await fetch("/api/process",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(!r.ok)return maskUrl(rec);
+      const url=URL.createObjectURL(await r.blob());state.urls.push(url);return url;
+    }
+
+    function renderReplay(){
+      const r=state.rec,f=r.inputs||{};
+      $("targetTemp").textContent=`${fmt(r.target_temperature_c)} C`;
+      $("cloudCover").textContent=`${fmt(f.cloud_cover_mean)}%`;
+      $("radiation").textContent=`${fmt(f.shortwave_radiation_sum)} kWh/m2`;
+      $("humidity").textContent=`${fmt(f.s3_humidity_pct)}%`;
+      $("sourceNotes").innerHTML=Object.values(r.source_notes||{}).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join("");
+      $("features").innerHTML=Object.entries(f).map(([k,v])=>bar(k,v)).join("");
+    }
+
+    function renderCounter(){
+      if(!state.rec||!state.scene||!state.mask)return;
+      const strength=Number($("strength").value)/100;$("strengthOut").textContent=`${Math.round(strength*100)}%`;
+      drawBase($("beforeCanvas"),state.scene,state.mask,0,"base");
+      drawBase($("afterCanvas"),state.scene,state.mask,strength,state.mode);
+      const d=counterDelta(state.rec,strength,state.mode);
+      $("counterKpis").innerHTML=[
+        ["Cloud cover",d.before.cover,d.after.cover,"%"],
+        ["Temperature proxy",d.before.temp,d.after.temp,"C"],
+        ["Shortwave",d.before.rad,d.after.rad,"kWh/m2"],
+        ["Humidity",d.before.hum,d.after.hum,"%"]
+      ].map(([n,b,a,u])=>`<div class="kpi"><small>${n}</small><b>${fmt(b)} to ${fmt(a)} ${u}</b><small>${signed(a-b)} ${u}</small></div>`).join("");
+    }
+
+    function drawBase(canvas,scene,mask,strength,mode){
+      const w=768,h=480,ctx=canvas.getContext("2d");canvas.width=w;canvas.height=h;ctx.drawImage(scene,0,0,w,h);
+      const alpha=maskAlpha(mask,w,h);
+      if(mode==="less")for(let i=0;i<alpha.length;i++)alpha[i]*=(1-strength*.75);
+      if(mode==="shift")shiftAlpha(alpha,w,h,Math.round(120*strength),Math.round(-45*strength));
+      if(mode==="focus")addBlob(alpha,w,h,.62,.38,70+120*strength,170*strength);
+      if(mode==="more")for(let i=0;i<alpha.length;i++)alpha[i]=Math.min(255,alpha[i]*(1+strength*.7)+42*strength);
+      blur(alpha,Math.round(10+12*strength),w,h);
+      const cloud=document.createElement("canvas"),cx=cloud.getContext("2d"),data=cx.createImageData(w,h);
+      cloud.width=w;cloud.height=h;
+      for(let i=0;i<alpha.length;i++){const j=i*4,a=Math.min(220,alpha[i]);data.data[j]=244;data.data[j+1]=250;data.data[j+2]=255;data.data[j+3]=a}
+      cx.putImageData(data,0,0);ctx.globalCompositeOperation=mode==="less"?"source-over":"screen";ctx.drawImage(cloud,0,0);ctx.globalCompositeOperation="source-over";
+    }
+
+    function renderSplitCards(){
+      $("splitCards").innerHTML=["train","val","test"].map(k=>{
+        const rows=state.splits[k]||[],temps=rows.map(r=>Number(r.target_temperature_c)).filter(Number.isFinite);
+        return `<div class="kpi ${k===state.split?"active":""}" data-split="${k}"><small>${k.toUpperCase()}</small><b>${rows.length}</b><small>${fmt(avg(temps))} C avg target</small></div>`;
+      }).join("");
+      document.querySelectorAll("[data-split]").forEach(c=>c.onclick=()=>{state.split=c.dataset.split;renderSplitCards();renderGallery()});
+      renderGallery();
+    }
+
+    function renderGallery(){
+      const rows=(state.splits[state.split]||[]).slice(0,16);
+      $("galleryTitle").textContent=`${title(state.split)} samples`;
+      $("gallery").innerHTML=rows.map(r=>`<div class="sample" data-id="${r.sample_id}"><img src="${maskUrl(r)}" alt=""><div><b>${r.city}</b>${r.date}<br>${fmt(r.target_temperature_c)} C target</div></div>`).join("");
+      document.querySelectorAll(".sample").forEach(el=>el.onclick=async()=>{const rec=state.records.find(r=>r.sample_id===el.dataset.id);if(rec){cityBox.value=rec.city.toLowerCase();syncDates();dateBox.value=rec.date;await loadSelected();setTest("replay")}});
+    }
+
+    function counterDelta(rec,s,mode){
+      const f=rec.inputs||{},base={cover:num(f.cloud_cover_mean),temp:num(rec.target_temperature_c),rad:num(f.shortwave_radiation_sum),hum:num(f.s3_humidity_pct)};
+      const sign=mode==="less"?-1:1,focus=mode==="focus"?1.25:1,shift=mode==="shift"?.35:1;
+      const cloudMove=sign*Math.max(4,Math.min(30,(100-base.cover)*.28))*s*focus*shift;
+      return {before:base,after:{cover:clamp(base.cover+cloudMove,0,100),temp:clamp(base.temp-cloudMove*.045,-40,55),rad:Math.max(0,base.rad-cloudMove*.12),hum:clamp(base.hum+cloudMove*.16,0,100)}};
+    }
+
+    function bar(k,v){const r=featureRanges[k]||[0,1],p=clamp((Number(v)-r[0])/(r[1]-r[0]),0,1)*100;return `<div class="bar"><span>${labels[k]||k}</span><div class="track"><div class="fill" style="width:${p}%"></div></div><b>${fmt(v)} ${units[k]||""}</b></div>`}
+    function maskAlpha(mask,w,h){const c=document.createElement("canvas"),x=c.getContext("2d",{willReadFrequently:true});c.width=w;c.height=h;x.drawImage(mask,0,0,w,h);const p=x.getImageData(0,0,w,h).data,a=new Float32Array(w*h);for(let i=0;i<a.length;i++){const j=i*4,v=(p[j]+p[j+1]+p[j+2])/3;a[i]=v<18?0:Math.min(255,(v-18)*1.45)}return a}
+    function shiftAlpha(a,w,h,dx,dy){const b=new Float32Array(a);a.fill(0);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const sx=x-dx,sy=y-dy;if(sx>=0&&sx<w&&sy>=0&&sy<h)a[y*w+x]=b[sy*w+sx]}}
+    function addBlob(a,w,h,x01,y01,r,val){const cx=x01*w,cy=y01*h;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const d=((x-cx)**2+(y-cy)**2)/(2*r*r);a[y*w+x]=Math.min(255,a[y*w+x]+Math.exp(-d)*val)}}
+    function blur(a,r,w,h){const t=new Float32Array(a.length),d=r*2+1;for(let y=0;y<h;y++)for(let x=0,sum=0;x<w;x++){if(x===0)for(let k=-r;k<=r;k++)sum+=a[y*w+clamp(k,0,w-1)];else sum+=a[y*w+clamp(x+r,0,w-1)]-a[y*w+clamp(x-r-1,0,w-1)];t[y*w+x]=sum/d}for(let x=0;x<w;x++)for(let y=0,sum=0;y<h;y++){if(y===0)for(let k=-r;k<=r;k++)sum+=t[clamp(k,0,h-1)*w+x];else sum+=t[clamp(y+r,0,h-1)*w+x]-t[clamp(y-r-1,0,h-1)*w+x];a[y*w+x]=sum/d}}
+    function parseJsonl(t){return t.trim().split(/\n+/).filter(Boolean).map(JSON.parse)}
+    async function fetchText(url){const r=await fetch(url);if(!r.ok)throw new Error(`${url}: ${await r.text()}`);return r.text()}
+    function loadImage(src){return new Promise((res,rej)=>{const i=new Image;i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=()=>rej(new Error(`Image failed: ${src}`));i.src=src})}
+    function maskUrl(r){return `/${String(r.mask_path||"").replaceAll("\\\\","/").replace(/^\/?/,"dataset_out/")}`}
+    function setStatus(t){status.className="status";status.textContent=t}
+    function showError(e){status.className="status err";status.textContent=e.message||String(e)}
+    function num(x){return Number.isFinite(Number(x))?Number(x):0}
+    function avg(xs){return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:0}
+    function clamp(v,a,b){return Math.min(b,Math.max(a,v))}
+    function fmt(x){x=Number(x);return Number.isFinite(x)?x.toFixed(Math.abs(x)>=100?0:1):"--"}
+    function signed(x){return `${x>=0?"+":""}${fmt(x)}`}
+    function title(x){return String(x).replace(/\b\w/g,m=>m.toUpperCase())}
+    function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}
+  </script>
+</body>
+</html>

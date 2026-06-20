@@ -3,41 +3,41 @@
    ============================================================ */
 
 :root {
-  /* base surfaces — warm light */
-  --bg:            #fbf4ec;
-  --bg-2:          #f5ebdf;
-  --surface:       #fffaf3;
-  --surface-2:     #f3e7d8;
-  --line:          rgba(42, 33, 28, 0.10);
-  --line-strong:   rgba(42, 33, 28, 0.18);
+  /* base surfaces — deep teal-navy (dark) */
+  --bg:            #081317;
+  --bg-2:          #0b1c22;
+  --surface:       #0f242b;
+  --surface-2:     #16323b;
+  --line:          rgba(220, 240, 238, 0.10);
+  --line-strong:   rgba(220, 240, 238, 0.20);
 
-  /* text */
-  --ink:           #2a211c;
-  --ink-soft:      #6b5b4f;
-  --ink-mute:      #9c8b7d;
+  /* text — soft white, not pure */
+  --ink:           #e9f1ef;
+  --ink-soft:      #a3bcbd;
+  --ink-mute:      #6e8a8d;
 
-  /* brand — terracotta primary */
-  --primary:       #e2553a;
-  --primary-deep:  #b8402a;
-  --primary-glow:  rgba(226, 85, 58, 0.28);
-  /* legacy aliases: existing --cool* usages now resolve to the terracotta primary */
-  --cool:          var(--primary);
-  --cool-deep:     var(--primary-deep);
-  --cool-glow:     var(--primary-glow);
+  /* brand — yellow primary */
+  --primary:       #f5c542;
+  --primary-deep:  #d9a521;
+  --primary-glow:  rgba(245, 197, 66, 0.28);
+  /* teal secondary accent (own identity, no longer aliased to primary) */
+  --cool:          #34d3c0;
+  --cool-deep:     #1fa896;
+  --cool-glow:     rgba(52, 211, 192, 0.25);
 
   /* semantic accents */
-  --success:       #3a9d5d;   /* green — completed / positive */
-  --success-glow:  rgba(58, 157, 93, 0.28);
-  --accent:        #ffb152;   /* amber — active / highlight */
+  --success:       #34d399;   /* teal-green — completed / positive */
+  --success-glow:  rgba(52, 211, 153, 0.28);
+  --accent:        #f0a830;   /* amber/gold — transition tone yellow↔teal */
 
-  /* heat — warm data accent (increases) */
-  --heat:          #e2553a;
-  --heat-deep:     #c23b22;
-  --heat-glow:     rgba(226, 85, 58, 0.24);
+  /* heat — warm accent (errors only) */
+  --heat:          #f0613f;
+  --heat-deep:     #e2492a;
+  --heat-glow:     rgba(240, 97, 63, 0.24);
 
-  /* glass — light */
-  --glass-bg:      rgba(255, 255, 255, 0.55);
-  --glass-brd:     rgba(42, 33, 28, 0.10);
+  /* glass — dark */
+  --glass-bg:      rgba(15, 36, 43, 0.55);
+  --glass-brd:     rgba(220, 240, 238, 0.12);
   --glass-blur:    18px;
 
   --radius:        18px;
@@ -67,7 +67,7 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-::selection { background: var(--primary); color: #fff5ee; }
+::selection { background: var(--primary); color: #081317; }
 
 a { color: inherit; text-decoration: none; }
 img, canvas, svg { display: block; max-width: 100%; }
@@ -79,9 +79,9 @@ body::before {
   inset: 0;
   z-index: -2;
   background:
-    radial-gradient(900px 600px at 78% -8%, rgba(226, 85, 58, 0.10), transparent 60%),
-    radial-gradient(1000px 700px at 12% 8%, rgba(255, 177, 82, 0.10), transparent 55%),
-    radial-gradient(700px 700px at 85% 105%, rgba(58, 157, 93, 0.07), transparent 60%);
+    radial-gradient(900px 600px at 78% -8%, rgba(245, 197, 66, 0.10), transparent 60%),
+    radial-gradient(1000px 700px at 12% 8%, rgba(240, 168, 48, 0.08), transparent 55%),
+    radial-gradient(700px 700px at 85% 105%, rgba(52, 211, 192, 0.09), transparent 60%);
 }
 
 /* fine grain overlay */
@@ -90,8 +90,8 @@ body::before {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  opacity: 0.035;
-  mix-blend-mode: multiply;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -126,15 +126,15 @@ body::before {
 .btn svg { transition: transform 0.35s var(--ease); }
 .btn--primary {
   background: var(--primary);
-  color: #fff5ee;
+  color: #081317;
   box-shadow: 0 8px 30px -8px var(--primary-glow);
 }
 .btn--primary:hover {
-  box-shadow: 0 14px 40px -10px var(--cool-glow);
+  box-shadow: 0 14px 40px -10px var(--primary-glow);
 }
 .btn--primary:hover svg { transform: translateX(3px); }
 .btn--ghost {
-  background: rgba(42, 33, 28, 0.02);
+  background: rgba(220, 240, 238, 0.03);
   border-color: var(--line-strong);
   color: var(--ink);
 }
@@ -204,7 +204,7 @@ body::before {
   border-bottom: 1px solid transparent;
 }
 .nav.is-scrolled {
-  background: rgba(255, 250, 243, 0.72);
+  background: rgba(8, 19, 23, 0.72);
   border-bottom-color: var(--line);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -279,8 +279,8 @@ body::before {
   inset: 0;
   z-index: 1;
   background:
-    radial-gradient(120% 80% at 50% 0%, transparent 40%, rgba(251,244,236,0.55) 100%),
-    linear-gradient(180deg, rgba(251,244,236,0.20) 0%, transparent 30%, rgba(251,244,236,0.92) 100%);
+    radial-gradient(120% 80% at 50% 0%, transparent 40%, rgba(8,19,23,0.55) 100%),
+    linear-gradient(180deg, rgba(8,19,23,0.20) 0%, transparent 30%, rgba(8,19,23,0.92) 100%);
   pointer-events: none;
 }
 .hero__content {
@@ -367,7 +367,7 @@ body::before {
 .stat:hover {
   transform: translateY(-4px);
   border-color: var(--line-strong);
-  background: rgba(42, 33, 28, 0.03);
+  background: rgba(220, 240, 238, 0.04);
 }
 .stat__icon {
   flex: 0 0 auto;
@@ -375,8 +375,8 @@ body::before {
   display: grid; place-items: center;
   border-radius: 12px;
   color: var(--primary);
-  background: rgba(226, 85, 58, 0.08);
-  border: 1px solid rgba(226, 85, 58, 0.18);
+  background: rgba(245, 197, 66, 0.10);
+  border: 1px solid rgba(245, 197, 66, 0.22);
 }
 .stat__icon svg { width: 24px; height: 24px; }
 .stat__num {
@@ -449,15 +449,15 @@ input[type="range"]::-moz-range-thumb {
 .case:hover {
   transform: translateY(-6px);
   border-color: var(--line-strong);
-  background: rgba(42, 33, 28, 0.03);
+  background: rgba(220, 240, 238, 0.04);
 }
 .case__icon {
   width: 52px; height: 52px;
   display: grid; place-items: center;
   border-radius: 14px;
-  color: var(--primary);
-  background: rgba(226, 85, 58, 0.07);
-  border: 1px solid rgba(226, 85, 58, 0.16);
+  color: var(--cool);
+  background: rgba(52, 211, 192, 0.08);
+  border: 1px solid rgba(52, 211, 192, 0.18);
   margin-bottom: 1.4rem;
 }
 .case__icon svg { width: 26px; height: 26px; }
@@ -482,7 +482,7 @@ input[type="range"]::-moz-range-thumb {
   content: "";
   position: absolute;
   inset: 0;
-  background: radial-gradient(60% 90% at 50% 0%, rgba(226,85,58,0.10), transparent 70%);
+  background: radial-gradient(60% 90% at 50% 0%, rgba(245,197,66,0.10), transparent 70%);
   pointer-events: none;
 }
 .vision .kicker { display: block; position: relative; }

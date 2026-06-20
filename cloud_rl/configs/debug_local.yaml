@@ -1,33 +1,30 @@
-data_root: dataset_cloudforce_radiation_v6
-out_dir: ./runs/cloud_rl
+data_root: dataset_out
+out_dir: ./runs/debug_rl
 image_height: 256
 image_width: 256
-batch_size: 16
+batch_size: 4
 num_workers: 0
-lookback: 4
-max_gap_days: 12.0
 seed: 42
 
 policy:
   max_actions: 3
   hidden_dim: 256
   lr: 0.0003
-  entropy_coef: 0.001
-  bc_coef: 0.02
+  entropy_coef: 0.0
+  bc_coef: 0.05
   value_coef: 0.5
   clip_eps: 0.2
-  ppo_epochs: 2
+  ppo_epochs: 4
   grad_clip: 0.5
   guided_random_candidates: 4
 
 training:
-  updates: 1000
-  steps_per_update: 8
-  save_every: 50
-  eval_every: 50
+  updates: 8
+  steps_per_update: 2
+  save_every: 1
+  eval_every: 1
 
 normalization:
-  # Used when no stats.json exists. Better: run once with --write-stats.
   target_temp_mean: 20.0
   target_temp_std: 10.0
 

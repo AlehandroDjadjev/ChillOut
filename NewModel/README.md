@@ -42,12 +42,32 @@ python build_temperature_dataset_cloudforce.py ^
   --target-offset-days 5
 ```
 
-## Train
+You can also let the trainer run the extractor first:
 
 ```cmd
-python train_cloud_temp_interaction.py ^
+python NewModel\train_cloud_temp_interaction.py ^
+  --build-dataset ^
+  --start-date 2023-01-01 ^
+  --end-date 2026-01-01 ^
+  --dataset-out dataset_cloudforce_interaction ^
+  --out-dir runs/cloud_temp_interaction ^
+  --max-scenes-per-location 200 ^
+  --resolution-m 250 ^
+  --patch-km 10 ^
+  --s2-workers 8 ^
+  --openmeteo-workers 1 ^
+  --target-offset-days 5
+```
+
+## Train
+
+Fresh run, ignoring any existing `last.pt`:
+
+```cmd
+python NewModel\train_cloud_temp_interaction.py ^
   --data-root dataset_cloudforce_interaction ^
   --out-dir runs/cloud_temp_interaction ^
+  --fresh ^
   --image-height 160 ^
   --image-width 160 ^
   --lookback 4 ^
@@ -59,7 +79,55 @@ python train_cloud_temp_interaction.py ^
   --cloud-aux-weight 0.35
 ```
 
+Continue from `runs/cloud_temp_interaction/last.pt`:
+
+```cmd
+python NewModel\train_cloud_temp_interaction.py ^
+  --data-root dataset_cloudforce_interaction ^
+  --out-dir runs/cloud_temp_interaction ^
+  --resume auto ^
+  --epochs 200 ^
+  --batch-size 24 ^
+  --num-workers 0
+```
+
+Resume from a specific checkpoint:
+
+```cmd
+python NewModel\train_cloud_temp_interaction.py ^
+  --data-root dataset_cloudforce_interaction ^
+  --out-dir runs/cloud_temp_interaction ^
+  --resume runs/cloud_temp_interaction/last.pt ^
+  --epochs 200
+```
+
 Use `--lookback 1` if your data is too sparse. Use `--num-workers 0` on Windows.
+
+## Use As RL Reward
+
+The RL reward adapter can now load this model directly. After the first model has
+`runs/cloud_temp_interaction/best.pt` or `last.pt`, start RL with:
+
+```cmd
+python cloud_rl\train_rl.py ^
+  --config cloud_rl\configs\default.yaml ^
+  --data-root dataset_cloudforce_interaction ^
+  --split train ^
+  --resume auto ^
+  --reward-checkpoint auto
+```
+
+`--reward-checkpoint auto` looks for `runs/cloud_temp_interaction` first. You can
+also pass the checkpoint explicitly:
+
+```cmd
+python cloud_rl\train_rl.py ^
+  --config cloud_rl\configs\default.yaml ^
+  --data-root dataset_cloudforce_interaction ^
+  --split train ^
+  --resume auto ^
+  --reward-checkpoint runs/cloud_temp_interaction/best.pt
+```
 
 ## Diagnose
 

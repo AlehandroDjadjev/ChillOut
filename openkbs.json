@@ -1,5 +1,5 @@
 {
-  "projectId": "5ca3e61fce09",
+  "projectId": "30dd4f8523d0",
   "region": "eu-central-1",
   "postgres": true,
   "storage": { "cloudfront": "media" },
