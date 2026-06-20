@@ -1,0 +1,37 @@
+{
+  "split": "val",
+  "num_windows": 70,
+  "target_names": [
+    "shortwave_anomaly_next_5day",
+    "longwave_anomaly_next_5day",
+    "net_radiation_anomaly_next_5day",
+    "temperature_anomaly_next_5day"
+  ],
+  "cloud_channel_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "model_losses": {
+    "normal": 0.21115135507924215,
+    "no_cloud": 0.23197301647492818,
+    "cloud_shuffle": 0.2342263741152627,
+    "no_noncloud": 0.5355764831815447,
+    "all_zero_input": 0.36816728115081787
+  },
+  "files": {
+    "metrics_csv": "diagnostics\\val\\metrics_by_channel.csv",
+    "sensitivity_csv": "diagnostics\\val\\prediction_sensitivity.csv",
+    "worst_csv": "diagnostics\\val\\worst_windows.csv",
+    "input_channel_importance_csv": "diagnostics\\val\\input_channel_importance.csv"
+  }
+}
