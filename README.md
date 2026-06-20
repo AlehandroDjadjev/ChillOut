@@ -1,6 +1,6 @@
 # Stara Zagora Field Explorer
 
-A tiny static HTML/JavaScript demo that keeps Sentinel-2 imagery front and center, while also letting you switch to Sentinel-5P cloud and chemistry fields, Sentinel-3 OLCI atmospheric fields, and ERA5 weather fields for the area around Stara Zagora, Bulgaria.
+A tiny static HTML/JavaScript demo that keeps Sentinel-2 imagery front and center, while also letting you switch to Sentinel-5P cloud and chemistry fields, Sentinel-3 OLCI atmospheric fields, Sentinel-3 SLSTR cloud-proxy bands, and ERA5 weather fields for the area around Stara Zagora, Bulgaria.
 
 The page finds the latest 7 samples for the selected source and field, then renders them as a simple visual strip.
 
@@ -49,9 +49,11 @@ Keep `.env` private. The page no longer sends your client secret to the browser.
 - Sentinel-2 scenes come from the Sentinel Hub Catalog and Process APIs, and support natural color imagery, cloud mask, and cloud probability.
 - Sentinel-5P scenes come from the Sentinel Hub Catalog and Process APIs, using the exact cloud-property products in Sentinel Hub, plus atmospheric columns like cloud fraction, cloud optical thickness, cloud top height, cloud top pressure, NO2, O3, CO, CH4, SO2, and aerosol index.
 - Sentinel-3 OLCI scenes come from the Sentinel Hub Catalog and Process APIs, and give a much finer atmospheric view than Sentinel-5P for humidity, sea level pressure, water vapour, and a cloud-pressure proxy band. It does not replace the exact Sentinel-5P cloud-property products.
-- The chart view uses the Sentinel Hub Statistical API, which returns actual numeric summaries for supported bands instead of rendered imagery.
+- Sentinel-3 SLSTR scenes come from the Sentinel Hub Catalog and Process APIs, and expose cloud-screening, cloud-flagging, cirrus-detection, and cloud-clearing bands. That is the closest Copernicus source in this app for a cloud-type proxy, but it is still a proxy rather than a clean categorical cloud-type classifier.
 - ERA5 scenes are rendered server-side from Open-Meteo archive data, which is ERA5-based reanalysis. That is where wind, radiation, humidity, and cloud-layer fields come from.
-- No single satellite in this app covers the full set of requested variables, so the field picker switches between Sentinel-2, Sentinel-5P, Sentinel-3 OLCI, and ERA5 depending on what you want to inspect.
+- The radiation picker now includes shortwave, direct, diffuse, direct normal irradiance, global tilted radiation, and terrestrial radiation, all charted as numeric values instead of a single blended field.
+- The chart view uses the Sentinel Hub Statistical API, which returns actual numeric summaries for supported bands instead of rendered imagery.
+- No single satellite in this app covers the full set of requested variables, so the field picker switches between Sentinel-2, Sentinel-5P, Sentinel-3 OLCI, Sentinel-3 SLSTR, and ERA5 depending on what you want to inspect.
 
 Official references:
 
@@ -59,6 +61,7 @@ Official references:
 - [Sentinel-2 L2A data docs](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S2L2A.html)
 - [Sentinel-5P L2 data docs](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S5PL2.html)
 - [Sentinel-3 OLCI L1B data docs](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S3OLCI.html)
+- [Sentinel-3 SLSTR L1B data docs](https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/S3SLSTR.html)
 - [Open-Meteo historical weather API](https://open-meteo.com/en/docs/historical-weather-api)
 
 ## Training Dataset Export
@@ -90,6 +93,6 @@ Outputs land in `dataset_out/`:
 - `metadata.json`
 - `dataset.pt` if `torch` is installed in the Python environment
 
-`shortwave_radiation_sum` is used as a net-radiation proxy because it is the most stable daily radiation field exposed by the weather API we are using here.
+`shortwave_radiation_sum` is still used as a net-radiation proxy in the training export, but the viewer now exposes the fuller hourly radiation set separately in the ERA5 source.
 
 Blank or fully transparent satellite renders are dropped automatically, and the whole city-day sample is removed from the manifest so you do not train on empty masks.

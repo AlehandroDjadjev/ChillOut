@@ -16,10 +16,24 @@ const SOURCE_OPTIONS = {
       { value: "water_vapour", label: "Water vapour" },
     ],
   },
+  sentinel3slstr: {
+    label: "Sentinel-3 SLSTR",
+    fields: [
+      { value: "cloud_screening", label: "Cloud screening" },
+      { value: "cloud_flagging", label: "Cloud flagging" },
+      { value: "cirrus_detection", label: "Cirrus detection" },
+      { value: "cloud_clearing", label: "Cloud clearing" },
+    ],
+  },
   era5: {
     label: "ERA5",
     fields: [
-      { value: "shortwave_radiation", label: "Radiation" },
+      { value: "shortwave_radiation", label: "Shortwave radiation" },
+      { value: "direct_radiation", label: "Direct radiation" },
+      { value: "diffuse_radiation", label: "Diffuse radiation" },
+      { value: "direct_normal_irradiance", label: "Direct normal irradiance" },
+      { value: "global_tilted_radiation", label: "Global tilted radiation" },
+      { value: "terrestrial_radiation", label: "Terrestrial radiation" },
       { value: "wind_speed_10m", label: "Wind speed" },
       { value: "wind_direction_10m", label: "Wind direction" },
       { value: "relative_humidity_2m", label: "Humidity" },
@@ -520,6 +534,17 @@ function payloadUnitLabel(view, source, field) {
     );
   }
 
+  if (source === "sentinel3slstr") {
+    return (
+      {
+        cloud_screening: "reflectance",
+        cloud_flagging: "reflectance",
+        cirrus_detection: "reflectance",
+        cloud_clearing: "reflectance",
+      }[field] || "units"
+    );
+  }
+
   if (source === "sentinel5p") {
     return (
       {
@@ -555,6 +580,10 @@ function supportsStatistics(source, field) {
   }
 
   if (source === "sentinel3olci") {
+    return true;
+  }
+
+  if (source === "sentinel3slstr") {
     return true;
   }
 
