@@ -129,7 +129,7 @@
       var b = anim.bounds;
       var lonSpan = (b.lon1 - b.lon0) || 1e-6;
       var latSpan = (b.lat1 - b.lat0) || 1e-6;
-      ctx.strokeStyle = "rgba(42,33,28,0.85)";
+      ctx.strokeStyle = "rgba(240,168,48,0.9)";
       ctx.lineWidth = 1.6;
       ctx.setLineDash([5, 4]);
       rings.forEach(function (ring) {

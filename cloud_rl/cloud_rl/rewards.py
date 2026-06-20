@@ -24,6 +24,7 @@ class AbstractRewardModel(nn.Module):
         feature_vector: torch.Tensor,
         target_temperature: torch.Tensor,
         property_maps: torch.Tensor,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         raise NotImplementedError
 
@@ -41,7 +42,7 @@ class DummyMaxReward(AbstractRewardModel):
         self.max_score = float(max_score)
         self.optional_budget_penalty = float(optional_budget_penalty)
 
-    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps):
+    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps, **kwargs):
         b = original_mask.shape[0]
         reward = torch.full((b, 1), self.max_score, device=original_mask.device, dtype=original_mask.dtype)
         if self.optional_budget_penalty > 0:
@@ -58,8 +59,8 @@ class CallableReward(AbstractRewardModel):
         super().__init__()
         self.fn = fn
 
-    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps):
-        out = self.fn(original_mask, generated_mask, feature_vector, target_temperature, property_maps)
+    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps, **kwargs):
+        out = self.fn(original_mask, generated_mask, feature_vector, target_temperature, property_maps, **kwargs)
         if isinstance(out, tuple):
             return out
         return out, {}
@@ -92,7 +93,7 @@ class WorldModelReward(AbstractRewardModel):
         self.lambda_budget = float(lambda_budget)
         self.lambda_uncertainty = float(lambda_uncertainty)
 
-    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps):
+    def forward(self, original_mask, generated_mask, feature_vector, target_temperature, property_maps, **kwargs):
         b, _, h, w = original_mask.shape
         feature_planes = feature_vector[:, :, None, None].expand(-1, -1, h, w)
         # Raw target temp is passed as a plane. You may normalize it before this adapter if needed.
