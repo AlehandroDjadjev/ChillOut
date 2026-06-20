@@ -1,7 +1,5 @@
-cat > requirements.txt <<'EOF'
 torch
 torchvision
 pillow
 numpy
 tqdm
-EOF
