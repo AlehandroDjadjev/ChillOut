@@ -91,22 +91,22 @@ class CloudActorCritic(nn.Module):
         out = self(obs_map, features, target_temp_norm)
         op_dist = Categorical(logits=out.op_logits)
         op = op_dist.sample()
-        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=True)
-        op_entropy = op_dist.entropy().sum(dim=1, keepdim=True)
+        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=False)
+        op_entropy = op_dist.entropy().sum(dim=1, keepdim=False)
 
         param_dist = Normal(out.param_mu, out.param_std)
         raw = param_dist.rsample()
         params = torch.tanh(raw)
         # tanh correction for log prob.
         param_log_prob = param_dist.log_prob(raw) - torch.log(1.0 - params.pow(2) + 1e-6)
-        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=True)
-        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=True)
+        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=False)
+        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=False)
 
         return {
             "op": op,
             "params": params,
-            "log_prob": op_log_prob + param_log_prob,
-            "entropy": op_entropy + param_entropy,
+            "log_prob": (op_log_prob + param_log_prob).unsqueeze(-1),
+            "entropy": (op_entropy + param_entropy).unsqueeze(-1),
             "value": out.value,
         }
 
@@ -120,14 +120,14 @@ class CloudActorCritic(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         out = self(obs_map, features, target_temp_norm)
         op_dist = Categorical(logits=out.op_logits)
-        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=True)
-        op_entropy = op_dist.entropy().sum(dim=1, keepdim=True)
+        op_log_prob = op_dist.log_prob(op).sum(dim=1, keepdim=False)
+        op_entropy = op_dist.entropy().sum(dim=1, keepdim=False)
 
         params = params.clamp(-0.999, 0.999)
         raw = torch.atanh(params)
         param_dist = Normal(out.param_mu, out.param_std)
         param_log_prob = param_dist.log_prob(raw) - torch.log(1.0 - params.pow(2) + 1e-6)
-        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=True)
-        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=True)
+        param_log_prob = param_log_prob.sum(dim=(1, 2), keepdim=False)
+        param_entropy = param_dist.entropy().sum(dim=(1, 2), keepdim=False)
 
-        return op_log_prob + param_log_prob, op_entropy + param_entropy, out.value
+        return (op_log_prob + param_log_prob).unsqueeze(-1), (op_entropy + param_entropy).unsqueeze(-1), out.value
