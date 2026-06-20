@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChillOut — Precision Cloud Seeding for a Thirsty World</title>
+  <meta name="description" content="ChillOut identifies where cloud seeding could unlock the most rain, snow, and storm relief across a region — enhancing rainfall, building snowpack, and suppressing hail." />
+  <meta name="theme-color" content="#fbf4ec" />
+
+  <meta property="og:title" content="ChillOut — Seed the clouds, shape the weather." />
+  <meta property="og:description" content="Precision cloud seeding intelligence that finds where rain, snow, and storm relief would matter most." />
+  <meta property="og:type" content="website" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fbf4ec'/%3E%3Cpath d='M10 18a5 5 0 0 1 .6-9.96A6 6 0 0 1 22 9.5a4.5 4.5 0 0 1-.5 8.98z' fill='none' stroke='%23e2553a' stroke-width='1.6'/%3E%3Cpath d='M12 22l-1 3M16 22l-1 3M20 22l-1 3' stroke='%23e2553a' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E" />
+
+  <!-- bump ?v= whenever the referenced css/js changes (assets are cached immutable for 1y) -->
+  <link rel="stylesheet" href="css/styles.css?v=10" />
+  <link rel="stylesheet" href="css/animations.css?v=10" />
+</head>
+<body>
+  <!-- grain / atmosphere overlay -->
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- NAV -->
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a class="brand" href="#top" aria-label="ChillOut home">
+        <svg class="brand__mark" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M10 18a5.5 5.5 0 0 1 .5-10.97A6.5 6.5 0 0 1 22.5 8.5a5 5 0 0 1-.5 9.98z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 22l-1.4 3M16 22l-1.4 3M20 22l-1.4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">ChillOut</span>
+      </a>
+      <nav class="nav__links" aria-label="Primary">
+        <a href="#problem">Problem</a>
+        <a href="#use-cases">Use cases</a>
+        <a href="#vision">Vision</a>
+      </nav>
+      <a href="simulation/" class="btn btn--primary nav__cta">Launch Simulator</a>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- HERO -->
+    <section class="hero" id="hero">
+      <canvas class="hero__canvas" id="cloudCanvas" aria-hidden="true"></canvas>
+      <div class="hero__veil" aria-hidden="true"></div>
+      <div class="hero__content">
+        <p class="eyebrow reveal" data-reveal>
+          <span class="eyebrow__dot"></span> Precision Cloud-Seeding Platform
+        </p>
+        <h1 class="hero__title">
+          <span class="line reveal" data-reveal>Seed the clouds,</span>
+          <span class="line reveal" data-reveal data-delay="1"><em>shape</em> the weather.</span>
+        </h1>
+        <p class="hero__sub reveal" data-reveal data-delay="2">
+          ChillOut identifies where cloud seeding could unlock the most
+          rain, snow, and storm relief across a region.
+        </p>
+        <div class="hero__actions reveal" data-reveal data-delay="3">
+          <a href="simulation/" class="btn btn--primary">
+            Try the Simulator
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </a>
+          <a href="#problem" class="btn btn--ghost">Learn More</a>
+        </div>
+        <dl class="hero__stats reveal" data-reveal data-delay="4">
+          <div><dt>Rain</dt><dd>enhancement</dd></div>
+          <div class="hero__stats-sep" aria-hidden="true"></div>
+          <div><dt>Snowpack</dt><dd>building</dd></div>
+          <div class="hero__stats-sep" aria-hidden="true"></div>
+          <div><dt>Hail</dt><dd>suppression</dd></div>
+        </dl>
+      </div>
+      <a href="#problem" class="hero__scroll" aria-label="Scroll to content">
+        <span></span>
+      </a>
+    </section>
+
+    <!-- PROBLEM -->
+    <section class="section problem" id="problem">
+      <div class="section__head">
+        <p class="kicker reveal" data-reveal>01 — The challenge</p>
+        <h2 class="section__title reveal" data-reveal>
+          Water is becoming the world's<br /><span class="hot">defining constraint.</span>
+        </h2>
+        <p class="section__lead reveal" data-reveal data-delay="1">
+          Droughts deepen, snowpacks shrink, and storms grow more destructive.
+          The margin for water security is narrowing season by season.
+        </p>
+      </div>
+
+      <div class="stat-grid">
+        <article class="stat stat--wide glass reveal" data-reveal>
+          <div class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3c4 5 6 8 6 11a6 6 0 1 1-12 0c0-3 2-6 6-11z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 14a3 3 0 0 0 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </div>
+          <div class="stat__body">
+            <span class="stat__num" data-count="2.3" data-suffix="×">0</span>
+            <h3>Rising drought exposure</h3>
+            <p>Far more land faces severe drought than a generation ago, straining reservoirs, rivers, and the people who depend on them.</p>
+          </div>
+        </article>
+
+        <article class="stat glass reveal" data-reveal data-delay="1">
+          <div class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v18M5 7l14 10M19 7L5 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 3l-2.2 2.2M12 3l2.2 2.2M12 21l-2.2-2.2M12 21l2.2-2.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+          <div class="stat__body">
+            <span class="stat__num" data-count="21" data-prefix="−" data-suffix="%"></span>
+            <h3>Shrinking snowpack</h3>
+            <p>Mountain snowpack — a natural reservoir — is in measurable decline.</p>
+          </div>
+        </article>
+
+        <article class="stat glass reveal" data-reveal data-delay="2">
+          <div class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M7 16a4 4 0 0 1-.5-7.96A5 5 0 0 1 16 7.2 3.5 3.5 0 0 1 17 16z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 19l-1 2M13 19l-1 2M17 19l-1 2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </div>
+          <div class="stat__body">
+            <span class="stat__num" data-count="1.6" data-prefix="$" data-suffix="B"></span>
+            <h3>Hail damage</h3>
+            <p>Severe hailstorms inflict steep yearly losses on crops and property.</p>
+          </div>
+        </article>
+
+        <article class="stat stat--wide glass reveal" data-reveal data-delay="3">
+          <div class="stat__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 21V8m0 0c0-3 2.2-5 5.5-5 0 3.3-2.2 5-5.5 5zm0 4c0-3-2.2-5-5.5-5 0 3.3 2.2 5 5.5 5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="stat__body">
+            <span class="stat__num" data-count="31" data-suffix="%">0</span>
+            <h3>Water-stressed cropland</h3>
+            <p>A large share of the world's farmland now faces recurring water stress, putting yields and food security on a knife's edge.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- USE CASES -->
+    <section class="section use-cases" id="use-cases">
+      <div class="section__head">
+        <p class="kicker reveal" data-reveal>04 — Where it matters</p>
+        <h2 class="section__title reveal" data-reveal>Put precipitation<br />where it counts.</h2>
+      </div>
+      <div class="cases">
+        <article class="case glass reveal" data-reveal>
+          <div class="case__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3c4 5 6 8 6 11a6 6 0 1 1-12 0c0-3 2-6 6-11z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 14a3 3 0 0 0 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </div>
+          <h3>Water &amp; Agriculture</h3>
+          <p>Enhance rainfall to refill reservoirs and protect crops through dry spells.</p>
+        </article>
+        <article class="case glass reveal" data-reveal data-delay="1">
+          <div class="case__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v18M5 7l14 10M19 7L5 17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M12 3l-2.2 2.2M12 3l2.2 2.2M12 21l-2.2-2.2M12 21l2.2-2.2M5 7l.2 3M5 7l3-.2M19 17l-.2-3M19 17l-3 .2M19 7l-.2 3M19 7l-3-.2M5 17l.2-3M5 17l3 .2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </div>
+          <h3>Snowpack &amp; Water Supply</h3>
+          <p>Seed winter storms to build mountain snowpack and secure spring runoff.</p>
+        </article>
+        <article class="case glass reveal" data-reveal data-delay="2">
+          <div class="case__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l8 3v6c0 5-3.5 8-8 11-4.5-3-8-6-8-11V5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 11l2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <h3>Hail Suppression</h3>
+          <p>Reduce hail size in severe storms to protect crops, vehicles, and property.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- VISION -->
+    <section class="section vision" id="vision">
+      <div class="vision__inner glass reveal" data-reveal>
+        <p class="kicker reveal" data-reveal>05 — The horizon</p>
+        <h2 class="vision__title reveal" data-reveal data-delay="1">
+          A future of weather<br /><em>we can work with.</em>
+        </h2>
+        <p class="vision__text reveal" data-reveal data-delay="2">
+          As water grows scarce and storms intensify, communities need more than
+          forecasts — they need options. ChillOut turns atmospheric conditions
+          into data-driven seeding decisions, helping people bring rain where
+          it's needed, build the snow that feeds rivers, and blunt storms before
+          they strike.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="footer">
+    <div class="footer__inner">
+      <div class="footer__brand">
+        <a class="brand" href="#top" aria-label="ChillOut home">
+          <svg class="brand__mark" width="24" height="24" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+            <path d="M10 18a5.5 5.5 0 0 1 .5-10.97A6.5 6.5 0 0 1 22.5 8.5a5 5 0 0 1-.5 9.98z" stroke="currentColor" stroke-width="1.5"/>
+            <path d="M12 22l-1.4 3M16 22l-1.4 3M20 22l-1.4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          <span class="brand__name">ChillOut</span>
+        </a>
+        <p class="footer__tag">Precision Cloud Seeding for a Thirsty World.</p>
+      </div>
+      <nav class="footer__links" aria-label="Footer">
+        <a href="#problem">Problem</a>
+        <a href="#use-cases">Use cases</a>
+        <a href="#vision">Vision</a>
+      </nav>
+    </div>
+    <div class="footer__base">
+      <span>© 2026 ChillOut. Sample data shown for demonstration.</span>
+      <span class="footer__made">Seed the clouds, shape the weather.</span>
+    </div>
+  </footer>
+
+  <script src="js/clouds.js?v=10" defer></script>
+  <script src="js/reveal.js?v=10" defer></script>
+</body>
+</html>

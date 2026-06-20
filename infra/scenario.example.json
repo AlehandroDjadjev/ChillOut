@@ -1,0 +1,50 @@
+{
+  "simulation_id": "case_001",
+  "region": {
+    "target_polygon": {
+      "type": "Polygon",
+      "coordinates": []
+    },
+    "domain_center": {
+      "lat": 42.42,
+      "lon": 25.62
+    }
+  },
+  "time": {
+    "start_utc": "2026-07-15T06:00:00Z",
+    "duration_hours": 8,
+    "output_interval_minutes": 30
+  },
+  "domain": {
+    "max_domains": 2,
+    "outer_resolution_m": 3000,
+    "inner_resolution_m": 1000,
+    "inner_domain_size_km": 80
+  },
+  "input_data": {
+    "source": "GFS",
+    "forecast_cycle": "auto"
+  },
+  "objective": {
+    "target_variable": "T2",
+    "desired_delta_c": -2.0,
+    "target_time_window_hours": [2, 6],
+    "max_precipitation_mm": 0.2
+  },
+  "bad_scenario": {
+    "type": "baseline"
+  },
+  "good_scenario": {
+    "type": "cloud_modification",
+    "cloud": {
+      "cloud_type": "low_stratus",
+      "base_height_m_agl": 700,
+      "top_height_m_agl": 1400,
+      "cloud_fraction": 0.75,
+      "liquid_water_mixing_ratio_kg_kg": 0.0002,
+      "ice_mixing_ratio_kg_kg": 0.0,
+      "start_offset_hours": 1,
+      "duration_hours": 4
+    }
+  }
+}

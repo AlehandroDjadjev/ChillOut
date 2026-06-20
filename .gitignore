@@ -3,6 +3,9 @@ config.js
 .DS_Store
 Thumbs.db
 
+# Node
+node_modules/
+
 # Python/runtime noise
 __pycache__/
 *.py[cod]

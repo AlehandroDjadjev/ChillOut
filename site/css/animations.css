@@ -1,0 +1,113 @@
+/* ============================================================
+   ChillOut — keyframes + scroll-reveal system
+   ============================================================ */
+
+/* reveal: hidden -> shown when .is-visible is added by reveal.js */
+.reveal {
+  opacity: 0;
+  transform: translateY(26px);
+  filter: blur(6px);
+  transition:
+    opacity 0.9s var(--ease),
+    transform 0.9s var(--ease),
+    filter 0.9s var(--ease);
+  transition-delay: calc(var(--reveal-delay, 0) * 90ms);
+  will-change: opacity, transform;
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+
+/* eyebrow pulse */
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--primary-glow); }
+  50%      { box-shadow: 0 0 0 7px rgba(226, 85, 58, 0); }
+}
+
+/* hero scroll dot */
+@keyframes scrollDot {
+  0%   { opacity: 0; transform: translateY(0); }
+  30%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(12px); }
+}
+
+/* simulate button spinner */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* subtle float for glass panels on load (used by hero stats etc. via reveal) */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* result value flash when updated */
+.result__value.is-updated {
+  animation: flashUp 0.6s var(--ease);
+}
+@keyframes flashUp {
+  0%   { transform: translateY(8px); opacity: 0.2; }
+  100% { transform: none; opacity: 1; }
+}
+
+/* zone marker ping (driven by canvas, but used for the results card) */
+.result--zone.is-active .result__value { color: var(--cool); }
+
+/* ============================================================
+   LOADING / PROGRESS FEEDBACK (simulation studio)
+   ============================================================ */
+
+/* reusable circular spinner */
+.spinner {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  border: 2px solid var(--primary-glow);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -0.15em;
+}
+.spinner--lg { width: 2.4rem; height: 2.4rem; border-width: 3px; }
+
+/* indeterminate sweep bar — "something is happening" */
+.working-bar {
+  position: relative;
+  height: 4px;
+  width: 100%;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.working-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--primary), var(--accent), transparent);
+  animation: sweep 1.25s var(--ease) infinite;
+}
+@keyframes sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
+/* active pipeline stage — pulsing terracotta/amber */
+@keyframes stagePulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--primary-glow); }
+  50%      { box-shadow: 0 0 0 6px rgba(226, 85, 58, 0); }
+}
+
+/* shimmer for skeleton/placeholder blocks while waiting */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(100deg, var(--surface-2) 30%, var(--bg-2) 50%, var(--surface-2) 70%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 8px;
+}

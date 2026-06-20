@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChillOut — Simulation Studio</title>
+  <meta name="description" content="Compose a cloud-modification scenario and run it through the WRF weather model. Baseline vs. cloud-modified — no faked results." />
+  <meta name="theme-color" content="#fbf4ec" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fbf4ec'/%3E%3Cpath d='M10 18a5 5 0 0 1 .6-9.96A6 6 0 0 1 22 9.5a4.5 4.5 0 0 1-.5 8.98z' fill='none' stroke='%23e2553a' stroke-width='1.6'/%3E%3C/svg%3E" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <!-- bump ?v= whenever the referenced css/js changes (assets are cached immutable for 1y) -->
+  <link rel="stylesheet" href="../css/styles.css?v=10" />
+  <link rel="stylesheet" href="sim.css?v=10" />
+</head>
+<body class="sim-body">
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a class="brand" href="../index.html" aria-label="ChillOut home">
+        <svg class="brand__mark" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M10 18a5.5 5.5 0 0 1 .5-10.97A6.5 6.5 0 0 1 22.5 8.5a5 5 0 0 1-.5 9.98z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 22l-1.4 3M16 22l-1.4 3M20 22l-1.4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">ChillOut</span>
+      </a>
+      <span class="nav__tag">Simulation Studio</span>
+      <a href="../index.html" class="btn btn--ghost nav__cta">← Back home</a>
+    </div>
+  </header>
+
+  <main class="sim">
+    <div class="sim__head">
+      <p class="kicker">WRF simulation studio</p>
+      <h1 class="sim__title">Compose a <em>cloud-modification</em> scenario.</h1>
+      <p class="sim__lead">
+        Draw a target area, set the cloud you want to introduce, and submit it to the
+        Weather Research &amp; Forecasting model. ChillOut runs a baseline and a
+        cloud-modified simulation and compares them — results are <strong>simulated, with
+        stated assumptions and risks</strong>, never guaranteed outcomes.
+      </p>
+    </div>
+
+    <div class="sim__grid">
+      <!-- LEFT: map -->
+      <section class="sim__mapwrap glass">
+        <div id="map" class="sim__map" role="application" aria-label="Target area map"></div>
+        <div class="sim__maphint">
+          <span class="dot dot--domain"></span> WRF inner domain
+          <span class="dot dot--target"></span> Target areas (draw one or more)
+          <button type="button" id="clearPoly" class="linkbtn">Clear all</button>
+        </div>
+      </section>
+
+      <!-- RIGHT: panels -->
+      <section class="sim__panels">
+        <!-- Region -->
+        <details class="panel" open>
+          <summary>Region</summary>
+          <div class="panel__body grid2">
+            <label>Center lat
+              <input type="number" id="centerLat" step="0.01" value="42.42" />
+            </label>
+            <label>Center lon
+              <input type="number" id="centerLon" step="0.01" value="25.62" />
+            </label>
+            <p class="panel__note">Default: Stara Zagora, Bulgaria. Draw one or more target areas on the map (optional — empty means the whole domain).</p>
+          </div>
+        </details>
+
+        <!-- Time -->
+        <details class="panel" open>
+          <summary>Time</summary>
+          <div class="panel__body grid2">
+            <label>Start (UTC)
+              <input type="datetime-local" id="startUtc" value="2026-07-15T06:00" />
+            </label>
+            <label>Duration (h) <output id="durOut">8</output>
+              <input type="range" id="durationHours" min="1" max="12" step="1" value="8" />
+            </label>
+            <label>Output interval (min)
+              <input type="number" id="outInterval" min="5" step="5" value="30" />
+            </label>
+          </div>
+        </details>
+
+        <!-- Domain -->
+        <details class="panel">
+          <summary>Domain</summary>
+          <div class="panel__body grid2">
+            <label>Nesting (max_domains)
+              <select id="maxDomains">
+                <option value="1">1 (single)</option>
+                <option value="2" selected>2 (nested)</option>
+              </select>
+            </label>
+            <label>Inner size (km) <output id="sizeOut">80</output>
+              <input type="range" id="innerSize" min="20" max="300" step="10" value="80" />
+            </label>
+            <label>Outer res (m)
+              <input type="number" id="outerRes" min="1000" step="500" value="3000" />
+            </label>
+            <label>Inner res (m)
+              <input type="number" id="innerRes" min="1000" step="250" value="1000" />
+            </label>
+          </div>
+        </details>
+
+        <!-- Input data -->
+        <details class="panel">
+          <summary>Input data</summary>
+          <div class="panel__body grid2">
+            <label>Source
+              <select id="inputSource"><option value="GFS" selected>GFS</option></select>
+            </label>
+            <label>Forecast cycle
+              <input type="text" id="forecastCycle" value="auto" />
+            </label>
+          </div>
+        </details>
+
+        <!-- Objective -->
+        <details class="panel">
+          <summary>Objective</summary>
+          <div class="panel__body grid2">
+            <label>Target variable
+              <select id="targetVar">
+                <option value="T2" selected>T2 — 2m temperature</option>
+                <option value="RAINNC">RAINNC — precip</option>
+                <option value="SWDOWN">SWDOWN — shortwave</option>
+                <option value="TSK">TSK — surface temp</option>
+              </select>
+            </label>
+            <label>Desired Δ°C
+              <input type="number" id="desiredDelta" step="0.5" value="-2.0" />
+            </label>
+            <label>Window start (h)
+              <input type="number" id="winStart" min="0" step="1" value="2" />
+            </label>
+            <label>Window end (h)
+              <input type="number" id="winEnd" min="1" step="1" value="6" />
+            </label>
+            <label>Max precip (mm)
+              <input type="number" id="maxPrecip" min="0" step="0.1" value="0.2" />
+            </label>
+          </div>
+        </details>
+
+        <!-- Cloud -->
+        <details class="panel" open>
+          <summary>Cloud modification</summary>
+          <div class="panel__body grid2">
+            <label>Cloud type
+              <select id="cloudType">
+                <option value="low_stratus" selected>low_stratus</option>
+                <option value="stratocumulus">stratocumulus</option>
+                <option value="cumulus">cumulus</option>
+                <option value="altostratus">altostratus</option>
+              </select>
+            </label>
+            <label>Fraction <output id="fracOut">0.75</output>
+              <input type="range" id="cloudFrac" min="0" max="1" step="0.05" value="0.75" />
+            </label>
+            <label>Base (m AGL)
+              <input type="number" id="baseH" min="0" step="50" value="700" />
+            </label>
+            <label>Top (m AGL)
+              <input type="number" id="topH" min="0" step="50" value="1400" />
+            </label>
+            <label>Liquid water (kg/kg)
+              <input type="number" id="lwc" min="0" step="0.00005" value="0.0002" />
+            </label>
+            <label>Ice (kg/kg)
+              <input type="number" id="iwc" min="0" step="0.00005" value="0.0" />
+            </label>
+            <label>Start offset (h)
+              <input type="number" id="cloudStart" min="0" step="1" value="1" />
+            </label>
+            <label>Cloud duration (h)
+              <input type="number" id="cloudDur" min="1" step="1" value="4" />
+            </label>
+          </div>
+        </details>
+
+        <!-- Validation + submit -->
+        <div class="sim__actions glass">
+          <ul id="errors" class="errors" hidden></ul>
+          <div class="sim__actionrow">
+            <button type="button" id="toggleJson" class="btn btn--ghost">View scenario JSON</button>
+            <button type="button" id="submitBtn" class="btn btn--primary">
+              <span class="btn__spinner spinner"></span>
+              Run simulation
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <pre id="jsonView" class="jsonview" hidden></pre>
+        </div>
+      </section>
+    </div>
+
+    <!-- RESULT VIEWER -->
+    <section id="result" class="result glass" hidden>
+      <div class="result__top">
+        <div>
+          <p class="kicker">Simulation</p>
+          <h2 class="result__id" id="resId">—</h2>
+        </div>
+        <button type="button" id="newRun" class="btn btn--ghost">New run</button>
+      </div>
+
+      <ol class="pipeline" id="pipeline" aria-label="Simulation status"></ol>
+
+      <div class="result__body">
+        <!-- live status / spinner while the worker runs; error message on failure -->
+        <div id="resultStatus" class="placeholder">Waiting for the WRF worker to pick up this job…</div>
+
+        <!-- animated WRF playback — always laid out (no hidden tab), revealed on completion -->
+        <div id="player" class="player" hidden>
+          <div class="player__stage">
+            <canvas id="playerCanvas" class="player__canvas" role="img" aria-label="Animated WRF model output"></canvas>
+            <div class="player__readout"><span id="playerLayerTag">Δ change</span> · t = <span id="playerTime">+0.0 h</span></div>
+          </div>
+          <div class="player__controls">
+            <button type="button" id="playerPlay" class="player__play" aria-label="Play / pause">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            </button>
+            <input type="range" id="playerScrub" class="player__scrub" min="0" max="0" step="1" value="0" aria-label="Time" />
+            <div class="player__layers" role="tablist" aria-label="Layer">
+              <button type="button" class="player__layer is-active" data-layer="delta" role="tab">Δ</button>
+              <button type="button" class="player__layer" data-layer="baseline" role="tab">Baseline</button>
+              <button type="button" class="player__layer" data-layer="candidate" role="tab">Candidate</button>
+            </div>
+          </div>
+          <div class="player__legend">
+            <span id="playerLegendLo" class="player__legendval">–</span>
+            <span id="playerLegendBar" class="player__legendbar"></span>
+            <span id="playerLegendHi" class="player__legendval">+</span>
+            <span id="playerLegendUnit" class="player__legendunit"></span>
+          </div>
+          <p class="player__note">Real WRF frames (one per output step), played fast-forward. Δ = candidate − baseline.</p>
+        </div>
+
+        <!-- headline metrics + plain-language summary, shown alongside the playback -->
+        <div id="resultStats"></div>
+      </div>
+
+      <p class="result__disclaimer">
+        Results are <strong>simulated</strong> with the WRF model under the stated inputs and
+        assumptions. They estimate a plausible atmospheric response to the specified cloud —
+        not a guaranteed real-world outcome. Treat deltas as modelled signal with uncertainty.
+      </p>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script src="player.js?v=10"></script>
+  <script src="sim.js?v=10"></script>
+</body>
+</html>

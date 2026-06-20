@@ -1,0 +1,8 @@
+# ChillOut WRF worker daemon dependencies.
+# NOTE: netCDF4 must be ABI-compatible with the installed numpy. On the proven worker VM
+# the system netCDF4 (1.6.x) is built against numpy 1.24.x — do not blindly upgrade numpy.
+psycopg2-binary>=2.9,<3      # job-queue access (shared Postgres with the Lambda API)
+netCDF4>=1.6                 # read wrfout / edit wrfinput (cloud_injector, postprocessor)
+numpy>=1.24,<1.25           # grid math for masks and deltas; pinned for netCDF4 ABI
+# matplotlib intentionally omitted: point-in-polygon is done in pure numpy. It returns as a
+# dependency in the next round (PNG delta maps), pinned alongside a compatible numpy/netCDF4.
