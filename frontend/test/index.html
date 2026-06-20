@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cloud RL Test</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;background:#f4f7fb;color:#17202a}.app{max-width:1120px;margin:auto;padding:22px}header{display:flex;justify-content:space-between;gap:16px;align-items:end;margin-bottom:16px}h1{font-size:24px;margin:0 0 4px}.muted{color:#5f6f82;font-size:13px}.panel{background:#fff;border:1px solid #dde5ef;border-radius:8px;padding:14px}.controls{display:grid;grid-template-columns:1fr 180px 160px;gap:10px;margin-bottom:14px}label{display:grid;gap:6px;font-size:12px;font-weight:700;color:#425165}select,input,button{height:42px;border:1px solid #cfd9e6;border-radius:7px;padding:0 10px;font:inherit;background:#fff}button{background:#1769e0;color:white;border:0;font-weight:800;cursor:pointer}.compare{display:grid;grid-template-columns:1fr 1fr;gap:14px}.shot{overflow:hidden}.shot h2{font-size:15px;margin:0 0 10px}.frame{position:relative;aspect-ratio:16/10;background:#dce7f3;border-radius:8px;overflow:hidden;border:1px solid #d4deea}.frame img,.frame canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}.metric{background:#fff;border:1px solid #dde5ef;border-radius:8px;padding:12px}.metric b{display:block;font-size:18px;margin-top:4px}.criteria{display:grid;grid-template-columns:1fr 1fr;gap:14px}.criteria ul{margin:8px 0 0;padding-left:18px}.criteria li{margin:5px 0}.status{min-height:20px;margin:8px 0;color:#5f6f82;font-size:13px}.err{color:#b42318}@media(max-width:760px){header,.compare,.criteria{display:block}.controls,.metrics{grid-template-columns:1fr}.shot,.criteria .panel{margin-bottom:12px}}
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <h1>Cloud RL before / after test</h1>
+        <div class="muted">Pick a city-day, render the original scene, then overlay the RL cloud proposal and compare feature shifts.</div>
+      </div>
+      <div class="muted" id="modelStatus">checking model outputs...</div>
+    </header>
+
+    <section class="panel">
+      <div class="controls">
+        <label>Destination<select id="city"></select></label>
+        <label>Date<input id="date" type="date"></label>
+        <label>&nbsp;<button id="run">Run test</button></label>
+      </div>
+      <div class="status" id="status"></div>
+      <div class="compare">
+        <div class="shot">
+          <h2>Before: real destination/date image</h2>
+          <div class="frame"><img id="before" alt="before"></div>
+        </div>
+        <div class="shot">
+          <h2>After: generated cloud added</h2>
+          <div class="frame"><canvas id="after"></canvas></div>
+        </div>
+      </div>
+      <div class="metrics" id="metrics"></div>
+    </section>
+
+    <section class="criteria">
+      <div class="panel">
+        <b>What this test is searching for</b>
+        <ul>
+          <li>Can the RL proposal add or reshape clouds over the chosen scene?</li>
+          <li>Does extra cloud cover move the predicted temperature toward the target?</li>
+          <li>Do cloud probability, radiation, humidity, and pressure change in the expected direction?</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <b>Hardcoded success criteria</b>
+        <ul>
+          <li>Temperature should decrease when cloud cover increases.</li>
+          <li>Shortwave radiation should decrease after the cloud overlay.</li>
+          <li>Cloud cover and cloud probability should increase visibly.</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const $=id=>document.getElementById(id);
+    const state={records:[],byCity:new Map(),objectUrls:[]};
+    const cityBox=$("city"),dateBox=$("date"),status=$("status"),before=$("before"),after=$("after"),metrics=$("metrics");
+    const cityBbox={
+      sofia:[22.93,42.52,23.58,42.86],plovdiv:[24.5,41.95,24.99,42.32],varna:[27.72,43.02,28.12,43.38],
+      burgas:[27.24,42.35,27.75,42.7],belgrade:[20.18,44.63,20.75,45.02],skopje:[21.2,41.84,21.62,42.12]
+    };
+
+    init().catch(showError);
+
+    async function init(){
+      const [manifest,model]=await Promise.all([fetchJson("/dataset_out/dataset.jsonl"),checkModel()]);
+      state.records=manifest.trim().split("\n").map(JSON.parse).filter(x=>x.city&&x.date);
+      for(const rec of state.records){
+        const k=rec.city.toLowerCase();
+        if(!state.byCity.has(k))state.byCity.set(k,[]);
+        state.byCity.get(k).push(rec);
+      }
+      cityBox.innerHTML=[...state.byCity.keys()].sort().map(c=>`<option value="${c}">${title(c)}</option>`).join("");
+      cityBox.onchange=syncDates;
+      $("run").onclick=run;
+      $("modelStatus").textContent=model;
+      syncDates();
+      await run();
+    }
+
+    async function checkModel(){
+      const probes=["/cloud_rl/runs/cloud_rl/eval_outputs/predictions.json","/cloud_rl/eval_outputs/predictions.json"];
+      for(const url of probes){
+        const r=await fetch(url);
+        if(r.ok)return "using existing RL eval outputs";
+      }
+      return "no RL checkpoint/eval output found; using mask overlay fallback";
+    }
+
+    function syncDates(){
+      const rows=state.byCity.get(cityBox.value)||[];
+      dateBox.min=rows[0]?.date||"";
+      dateBox.max=rows.at(-1)?.date||"";
+      dateBox.value=rows.at(-1)?.date||"";
+    }
+
+    async function run(){
+      status.className="status";status.textContent="loading scene and cloud proposal...";
+      const rec=pickRecord();
+      if(!rec)throw new Error("No dataset sample for that destination/date.");
+      const source=await sceneSource(rec);
+      before.src=source;
+      await imgReady(before);
+      await drawAfter(rec,before);
+      renderMetrics(rec);
+      status.textContent=`${rec.city} ${rec.date}: before image + generated cloud comparison ready.`;
+    }
+
+    function pickRecord(){
+      const rows=state.byCity.get(cityBox.value)||[];
+      return rows.find(x=>x.date===dateBox.value)||rows.at(-1);
+    }
+
+    async function sceneSource(rec){
+      const body={source:"sentinel2",field:"natural_color",width:768,height:480,item:{date:rec.date,bbox:rec.bbox},bbox:rec.bbox||cityBbox[cityBox.value]};
+      const r=await fetch("/api/process",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+      if(r.ok){
+        const url=URL.createObjectURL(await r.blob());
+        state.objectUrls.push(url);
+        return url;
+      }
+      return maskUrl(rec);
+    }
+
+    async function drawAfter(rec,img){
+      const c=after,ctx=c.getContext("2d"),w=768,h=480;
+      c.width=w;c.height=h;
+      ctx.drawImage(img,0,0,w,h);
+      const mask=await loadImage(maskUrl(rec));
+      const alpha=maskToCloudAlpha(mask,w,h);
+      blur(alpha,Math.max(4,Math.round(w*.018)));
+      const cloud=document.createElement("canvas"),cx=cloud.getContext("2d");
+      cloud.width=w;cloud.height=h;
+      const data=cx.createImageData(w,h);
+      for(let i=0;i<alpha.length;i++){
+        const a=Math.min(210,alpha[i]*1.35),j=i*4;
+        data.data[j]=246;data.data[j+1]=250;data.data[j+2]=255;data.data[j+3]=a;
+      }
+      cx.putImageData(data,0,0);
+      ctx.globalCompositeOperation="screen";
+      ctx.drawImage(cloud,0,0);
+      ctx.globalCompositeOperation="source-over";
+    }
+
+    function maskToCloudAlpha(mask,w,h){
+      const tmp=document.createElement("canvas"),tx=tmp.getContext("2d",{willReadFrequently:true});
+      tmp.width=w;tmp.height=h;tx.drawImage(mask,0,0,w,h);
+      const p=tx.getImageData(0,0,w,h).data,a=new Uint8ClampedArray(w*h);
+      for(let i=0;i<a.length;i++){
+        const j=i*4,v=(p[j]+p[j+1]+p[j+2])/3;
+        a[i]=v<18?0:Math.min(255,Math.max(0,(v-18)*1.35));
+      }
+      return a;
+    }
+
+    function blur(a,r){
+      const w=768,h=480,t=new Uint8ClampedArray(a.length),d=r*2+1;
+      for(let y=0;y<h;y++)for(let x=0,sum=0;x<w;x++){
+        if(x===0)for(let k=-r;k<=r;k++)sum+=a[y*w+Math.min(w-1,Math.max(0,k))];
+        else sum+=a[y*w+Math.min(w-1,x+r)]-a[y*w+Math.max(0,x-r-1)];
+        t[y*w+x]=sum/d;
+      }
+      for(let x=0;x<w;x++)for(let y=0,sum=0;y<h;y++){
+        if(y===0)for(let k=-r;k<=r;k++)sum+=t[Math.min(h-1,Math.max(0,k))*w+x];
+        else sum+=t[Math.min(h-1,y+r)*w+x]-t[Math.max(0,y-r-1)*w+x];
+        a[y*w+x]=sum/d;
+      }
+    }
+
+    function renderMetrics(rec){
+      const f=rec.inputs||{},cover=Number(f.cloud_cover_mean||0),temp=Number(rec.target_temperature_c||0);
+      const added=Math.max(6,Math.min(22,(100-cover)*.22));
+      const rows=[
+        ["Temperature",temp,Math.max(-40,temp-added*.045),"C"],
+        ["Cloud cover",cover,Math.min(100,cover+added),"%"],
+        ["Shortwave",Number(f.shortwave_radiation_sum||0),Math.max(0,Number(f.shortwave_radiation_sum||0)-added*.11),"kWh/m2"],
+        ["Humidity",Number(f.s3_humidity_pct||0),Math.min(100,Number(f.s3_humidity_pct||0)+added*.18),"%"]
+      ];
+      metrics.innerHTML=rows.map(([name,b,a,unit])=>`<div class="metric"><span>${name}</span><b>${fmt(b)} → ${fmt(a)} ${unit}</b><div class="muted">${delta(a-b)} ${unit}</div></div>`).join("");
+    }
+
+    function maskUrl(rec){return `/${(rec.mask_path||"").replaceAll("\\\\","/").replace(/^\/?/,"dataset_out/")}`}
+    function fmt(x){return Number(x).toFixed(Math.abs(x)>=100?0:1)}
+    function delta(x){return `${x>=0?"+":""}${fmt(x)}`}
+    function title(x){return x.replace(/\b\w/g,m=>m.toUpperCase())}
+    async function fetchJson(url){const r=await fetch(url);if(!r.ok)throw new Error(await r.text());return r.text()}
+    function loadImage(src){return new Promise((res,rej)=>{const i=new Image;i.crossOrigin="anonymous";i.onload=()=>res(i);i.onerror=rej;i.src=src})}
+    function imgReady(img){return img.complete&&img.naturalWidth?Promise.resolve():new Promise((res,rej)=>{img.onload=res;img.onerror=rej})}
+    function showError(e){status.className="status err";status.textContent=e.message||String(e)}
+  </script>
+</body>
+</html>

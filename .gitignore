@@ -2,6 +2,13 @@ config.js
 .env
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
+=======
+
+# Agent/editor tooling and local uploads
+.claude/
+.uploads/
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
 # Node
 node_modules/

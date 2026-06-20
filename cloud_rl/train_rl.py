@@ -17,7 +17,11 @@ import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+<<<<<<< HEAD
 from cloud_rl.actions import rasterize_actions
+=======
+from cloud_rl.actions import CREATE, NOOP, REMOVE, rasterize_actions
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 from cloud_rl.dataset import CloudFolderDataset, collate_cloud_batch, compute_stats
 from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first_model_checkpoint
 from cloud_rl.models import CloudActorCritic
@@ -56,6 +60,23 @@ def noop_actions(batch_size: int, max_actions: int, device: torch.device) -> Dic
     }
 
 
+<<<<<<< HEAD
+=======
+def call_reward(reward_fn, batch: Dict[str, torch.Tensor], generated_mask: torch.Tensor, property_maps: torch.Tensor):
+    return reward_fn(
+        batch["original_mask"],
+        generated_mask,
+        batch["raw_features"],
+        batch["target_temp"],
+        property_maps,
+        original_mask_sequence=batch.get("original_mask_sequence"),
+        raw_feature_sequence=batch.get("raw_feature_sequence"),
+        trend_features=batch.get("trend_features"),
+        current_temperature=batch.get("current_temp"),
+    )
+
+
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 def resolve_rl_resume_checkpoint(source: str, out_dir: Path) -> Path | None:
     if source in {"", "none", None}:
         return None
@@ -87,6 +108,7 @@ def resolve_auto_reward_source(source: str) -> Path:
     if source not in {"", "auto"}:
         return resolve_existing_path(source)
     candidates = [
+        "runs/cloud_temp_cloudforced_radiation_v6",
         "runs/cloud_temp_interaction",
         "runs/cloud_temp_deep_480x300",
         "runs/cloud_temp",
@@ -98,7 +120,8 @@ def resolve_auto_reward_source(source: str) -> Path:
             continue
     raise FileNotFoundError(
         "Could not find an automatic first-model reward run. "
-        "Expected one of runs/cloud_temp_interaction, runs/cloud_temp_deep_480x300, or runs/cloud_temp."
+        "Expected one of runs/cloud_temp_cloudforced_radiation_v6, runs/cloud_temp_interaction, "
+        "runs/cloud_temp_deep_480x300, or runs/cloud_temp."
     )
 
 
@@ -135,13 +158,7 @@ def select_guided_actions(
     info_by_key: Dict[str, List[torch.Tensor]] = {}
     for candidate in candidates:
         rast = rasterize_actions(batch["original_mask"], candidate["op"], candidate["params"])
-        reward, info = reward_fn(
-            batch["original_mask"],
-            rast["generated_mask"],
-            batch["raw_features"],
-            batch["target_temp"],
-            rast["property_maps"],
-        )
+        reward, info = call_reward(reward_fn, batch, rast["generated_mask"], rast["property_maps"])
         rewards.append(reward)
         for key, value in info.items():
             info_by_key.setdefault(key, []).append(value)
@@ -181,9 +198,17 @@ def collect_rollout(
     target_std: float,
 ) -> tuple[RolloutBatch, Dict[str, float]]:
     chunks: Dict[str, List[torch.Tensor]] = {
-        "obs_map": [], "features": [], "target_temp_norm": [], "original_mask": [],
-        "raw_features": [], "target_temp": [], "op": [], "params": [],
-        "old_log_prob": [], "returns": [], "advantages": [],
+        "obs_map": [],
+        "features": [],
+        "target_temp_norm": [],
+        "original_mask": [],
+        "raw_features": [],
+        "target_temp": [],
+        "op": [],
+        "params": [],
+        "old_log_prob": [],
+        "returns": [],
+        "advantages": [],
     }
     debug_chunks: Dict[str, List[torch.Tensor]] = {
         "reward": [],
@@ -214,13 +239,7 @@ def collect_rollout(
                 )
             else:
                 rast = rasterize_actions(batch["original_mask"], sampled["op"], sampled["params"])
-                reward, reward_info = reward_fn(
-                    batch["original_mask"],
-                    rast["generated_mask"],
-                    batch["raw_features"],
-                    batch["target_temp"],
-                    rast["property_maps"],
-                )
+                reward, reward_info = call_reward(reward_fn, batch, rast["generated_mask"], rast["property_maps"])
             returns = reward.view(-1, 1)
             advantages = returns - sampled["value"]
             if "temp_error_c" in reward_info:
@@ -234,7 +253,14 @@ def collect_rollout(
             debug_chunks["reward"].append(reward.detach().cpu())
             debug_chunks["target_temp"].append(batch["target_temp"].detach().cpu())
 
-            for k in ["obs_map", "features", "target_temp_norm", "original_mask", "raw_features", "target_temp"]:
+            for k in [
+                "obs_map",
+                "features",
+                "target_temp_norm",
+                "original_mask",
+                "raw_features",
+                "target_temp",
+            ]:
                 chunks[k].append(batch[k].detach().cpu())
             chunks["op"].append(sampled["op"].detach().cpu())
             chunks["params"].append(sampled["params"].detach().cpu())
@@ -300,7 +326,13 @@ def main() -> None:
 
     image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
     num_workers = max(0, min(int(cfg.get("num_workers", 0)), 1))
-    dataset = CloudFolderDataset(data_root, image_size=image_size, split=args.split)
+    dataset = CloudFolderDataset(
+        data_root,
+        image_size=image_size,
+        split=args.split,
+        lookback=int(cfg.get("lookback", 4)),
+        max_gap_days=float(cfg.get("max_gap_days", 12.0)),
+    )
     loader_kwargs = {
         "dataset": dataset,
         "batch_size": int(cfg["batch_size"]),

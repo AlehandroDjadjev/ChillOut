@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import math
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -321,6 +323,32 @@ def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tens
     return {key.removeprefix("module."): value for key, value in state.items()}
 
 
+<<<<<<< HEAD
+=======
+def _strip_compile_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    if not any(key.startswith("_orig_mod.") for key in state):
+        return state
+    return {key.replace("_orig_mod.", "", 1): value for key, value in state.items()}
+
+
+def _load_v6_model_class():
+    root = Path(__file__).resolve().parents[2]
+    module_path = root / "NewModel" / "train_cloud_temp_cloudforced_radiation_v6.py"
+    if not module_path.exists():
+        raise FileNotFoundError(
+            "Could not load CloudForcedRadiationSplitConvLSTM_v6 reward model because "
+            f"{module_path} does not exist."
+        )
+    spec = importlib.util.spec_from_file_location("cloudforced_radiation_v6_reward", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not import v6 reward model from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.ResidualTrendSplitConvLSTM
+
+
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 class CloudTempCheckpointReward(AbstractRewardModel):
     """Reward model backed by a saved CloudTempModel checkpoint.
 
@@ -352,7 +380,11 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.cloud_feature_names = list(ckpt.get("cloud_feature_names", []))
         self.world_feature_names = list(ckpt.get("world_feature_names", []))
         self.architecture = str(ckpt.get("architecture", "CloudTempDeepModel"))
-        self.model_kind = "interaction" if self.cloud_feature_names and self.world_feature_names else "deep"
+        self.model_kind = (
+            "cloudforced_radiation_v6"
+            if "CloudForcedRadiationSplitConvLSTM_v6" in self.architecture or ckpt.get("target_is_delta")
+            else ("interaction" if self.cloud_feature_names and self.world_feature_names else "deep")
+        )
         self.image_height = int(ckpt["image_height"])
         self.image_width = int(ckpt["image_width"])
         self.lookback = int(ckpt.get("lookback", 1))
@@ -366,9 +398,16 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         target_norm = ckpt.get("target_normalizer") or {"mean": 0.0, "std": 1.0}
         self.target_mean_c = float(target_norm.get("mean", 0.0))
         self.target_std_c = float(target_norm.get("std", 1.0)) or 1.0
+        delta_norm = ckpt.get("delta_normalizer") or target_norm
+        self.delta_mean_c = float(delta_norm.get("mean", self.target_mean_c))
+        self.delta_std_c = float(delta_norm.get("std", self.target_std_c)) or 1.0
+        self.context_scale = float((ckpt.get("args") or {}).get("context_scale", 0.15))
 
-        state = _strip_module_prefix(ckpt["model_state"])
-        if self.model_kind == "interaction":
+        state = _strip_compile_prefix(_strip_module_prefix(ckpt["model_state"]))
+        if self.model_kind == "cloudforced_radiation_v6":
+            model_cls = _load_v6_model_class()
+            self.model = model_cls(**dict(ckpt.get("model_kwargs") or {}))
+        elif self.model_kind == "interaction":
             kwargs = dict(ckpt.get("model_kwargs") or {})
             kwargs.setdefault("num_cloud_features", len(self.cloud_feature_names))
             kwargs.setdefault("num_world_features", len(self.world_feature_names))
@@ -523,15 +562,60 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             align_corners=False,
         )
 
+<<<<<<< HEAD
     def _predict_temperature(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
         if self.model_kind == "deep":
             return self.model(mask, features)
 
+=======
+    def _split_cloud_world(self, normalized_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+>>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         raw_index = {name: i for i, name in enumerate(self.raw_feature_names)}
         cloud_idx = [raw_index[name] for name in self.cloud_feature_names]
         world_idx = [raw_index[name] for name in self.world_feature_names]
-        cloud = features[:, cloud_idx]
-        world = features[:, world_idx]
+        return normalized_features[..., cloud_idx], normalized_features[..., world_idx]
+
+    def _normalize_raw_sequence(self, raw_sequence: torch.Tensor) -> torch.Tensor:
+        b, t, f = raw_sequence.shape
+        flat = raw_sequence.reshape(b * t, f)
+        source_names = self._resolve_feature_names(f)
+        aligned = _align_by_names(flat.float(), source_names, self.raw_feature_names)
+        norm = self._prepare_aligned_features(aligned)
+        return norm.view(b, t, -1)
+
+    def _predict_temperature(
+        self,
+        mask: torch.Tensor,
+        features: torch.Tensor,
+        mask_sequence: Optional[torch.Tensor] = None,
+        feature_sequence: Optional[torch.Tensor] = None,
+        trend_features: Optional[torch.Tensor] = None,
+        current_temperature: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.model_kind == "deep":
+            return self.model(mask, features)
+
+        if self.model_kind == "cloudforced_radiation_v6":
+            steps = max(1, self.lookback)
+            if mask_sequence is None:
+                mask_sequence = mask[:, None, :, :, :].expand(-1, steps, -1, -1, -1).contiguous()
+            if feature_sequence is None:
+                feature_sequence = features[:, None, :].expand(-1, steps, -1).contiguous()
+            if trend_features is None:
+                trend_features = torch.zeros(
+                    (mask_sequence.shape[0], mask_sequence.shape[1], 4),
+                    dtype=features.dtype,
+                    device=features.device,
+                )
+            if current_temperature is None:
+                current_temperature = torch.zeros((mask_sequence.shape[0], 1), dtype=features.dtype, device=features.device)
+
+            cloud, world = self._split_cloud_world(feature_sequence)
+            out = self.model(mask_sequence, cloud, world, trend_features, context_scale=self.context_scale)
+            delta_c = out["final_delta"] * self.delta_std_c + self.delta_mean_c
+            return current_temperature.float() + delta_c
+
+        cloud, world = self._split_cloud_world(features)
         steps = max(1, self.lookback)
         seq_mask = mask[:, None, :, :, :].expand(-1, steps, -1, -1, -1).contiguous()
         seq_cloud = cloud[:, None, :].expand(-1, steps, -1).contiguous()
@@ -546,6 +630,10 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         feature_vector: torch.Tensor,
         target_temperature: torch.Tensor,
         property_maps: torch.Tensor,
+        original_mask_sequence: Optional[torch.Tensor] = None,
+        raw_feature_sequence: Optional[torch.Tensor] = None,
+        trend_features: Optional[torch.Tensor] = None,
+        current_temperature: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         original = self._prepare_mask(original_mask)
         generated = self._prepare_mask(generated_mask)
@@ -553,7 +641,43 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             original = original.contiguous(memory_format=torch.channels_last)
         if generated.ndim == 4 and generated.is_cuda:
             generated = generated.contiguous(memory_format=torch.channels_last)
-        if self.model_kind == "interaction":
+        original_seq = generated_seq = None
+        original_feature_seq = generated_feature_seq = None
+        trend = None
+        current = None
+
+        if self.model_kind == "cloudforced_radiation_v6":
+            if original_mask_sequence is not None:
+                original_seq = original_mask_sequence.float()
+                if original_seq.shape[-2:] != (self.image_height, self.image_width):
+                    b, t, c, _, _ = original_seq.shape
+                    original_seq = F.interpolate(
+                        original_seq.reshape(b * t, c, *original_mask_sequence.shape[-2:]),
+                        size=(self.image_height, self.image_width),
+                        mode="bilinear",
+                        align_corners=False,
+                    ).view(b, t, c, self.image_height, self.image_width)
+            else:
+                original_seq = original[:, None, :, :, :].expand(-1, max(1, self.lookback), -1, -1, -1).contiguous()
+            generated_seq = original_seq.clone()
+            generated_seq[:, -1] = generated
+
+            if raw_feature_sequence is not None:
+                original_feature_seq = self._normalize_raw_sequence(raw_feature_sequence.float())
+            else:
+                original_feature_seq = self._prepare_aligned_features(self._align_raw_features(feature_vector))[:, None, :].expand(
+                    -1, original_seq.shape[1], -1
+                ).contiguous()
+            aligned_raw = self._align_raw_features(feature_vector)
+            generated_raw = self._apply_action_to_cloud_features(aligned_raw, original, generated, property_maps)
+            generated_last = self._prepare_aligned_features(generated_raw)
+            generated_feature_seq = original_feature_seq.clone()
+            generated_feature_seq[:, -1] = generated_last
+            original_features = original_feature_seq[:, -1]
+            generated_features = generated_last
+            trend = trend_features.float() if trend_features is not None else None
+            current = current_temperature.float() if current_temperature is not None else None
+        elif self.model_kind == "interaction":
             aligned_raw = self._align_raw_features(feature_vector)
             generated_raw = self._apply_action_to_cloud_features(aligned_raw, original, generated, property_maps)
             original_features = self._prepare_aligned_features(aligned_raw)
@@ -567,12 +691,30 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             if generated.is_cuda:
                 stacked_masks = torch.cat([original, generated], dim=0)
                 stacked_features = torch.cat([original_features, generated_features], dim=0)
+                if self.model_kind == "cloudforced_radiation_v6":
+                    stacked_mask_seq = torch.cat([original_seq, generated_seq], dim=0)
+                    stacked_feature_seq = torch.cat([original_feature_seq, generated_feature_seq], dim=0)
+                    stacked_trend = torch.cat([trend, trend], dim=0) if trend is not None else None
+                    stacked_current = torch.cat([current, current], dim=0) if current is not None else None
+                else:
+                    stacked_mask_seq = stacked_feature_seq = stacked_trend = stacked_current = None
                 with torch.autocast(device_type="cuda", enabled=True):
-                    stacked_pred = self._predict_temperature(stacked_masks, stacked_features)
+                    stacked_pred = self._predict_temperature(
+                        stacked_masks,
+                        stacked_features,
+                        mask_sequence=stacked_mask_seq,
+                        feature_sequence=stacked_feature_seq,
+                        trend_features=stacked_trend,
+                        current_temperature=stacked_current,
+                    )
             else:
                 stacked_pred = self._predict_temperature(
                     torch.cat([original, generated], dim=0),
                     torch.cat([original_features, generated_features], dim=0),
+                    mask_sequence=torch.cat([original_seq, generated_seq], dim=0) if self.model_kind == "cloudforced_radiation_v6" else None,
+                    feature_sequence=torch.cat([original_feature_seq, generated_feature_seq], dim=0) if self.model_kind == "cloudforced_radiation_v6" else None,
+                    trend_features=torch.cat([trend, trend], dim=0) if self.model_kind == "cloudforced_radiation_v6" and trend is not None else None,
+                    current_temperature=torch.cat([current, current], dim=0) if self.model_kind == "cloudforced_radiation_v6" and current is not None else None,
                 )
 
         original_predicted_temperature, predicted_temperature = stacked_pred.chunk(2, dim=0)

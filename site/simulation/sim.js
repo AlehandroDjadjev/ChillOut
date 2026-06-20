@@ -20,8 +20,8 @@
 
   var drawControl = new L.Control.Draw({
     draw: {
-      polygon: { shapeOptions: { color: "#ff8a5c", weight: 1.5, fillOpacity: 0.12 } },
-      rectangle: { shapeOptions: { color: "#ff8a5c", weight: 1.5, fillOpacity: 0.12 } },
+      polygon: { shapeOptions: { color: "#f0a830", weight: 1.5, fillOpacity: 0.12 } },
+      rectangle: { shapeOptions: { color: "#f0a830", weight: 1.5, fillOpacity: 0.12 } },
       polyline: false, circle: false, marker: false, circlemarker: false,
     },
     edit: { featureGroup: drawnItems, edit: true, remove: true },
@@ -49,7 +49,7 @@
     if (isNaN(lat) || isNaN(lon) || isNaN(size)) return;
     var b = domainBounds(lat, lon, size);
     if (domainRect) map.removeLayer(domainRect);
-    domainRect = L.rectangle(b, { color: "#e2553a", weight: 1.5, dashArray: "6 5", fill: false }).addTo(map);
+    domainRect = L.rectangle(b, { color: "#34d3c0", weight: 1.5, dashArray: "6 5", fill: false }).addTo(map);
   }
 
   // ---- scenario build -----------------------------------------------------
