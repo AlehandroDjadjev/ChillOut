@@ -1,0 +1,1 @@
+python tools/cloud_state_dataset_downloader.py --start-date 2017-01-01 --end-date 2026-01-01 --out-dir ./cloud_state_dataset --max-cloud 100 --resolution-m 100 --patch-km 10 --build-npz --max-scenes-per-location 50 --s2-workers 8 --era5-workers 4

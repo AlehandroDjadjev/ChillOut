@@ -1,0 +1,46 @@
+{
+  "profile": "cloudforce",
+  "input_channels": [
+    "s2_cloud_mask_scl",
+    "s2_cloud_white",
+    "s2_cloud_prob_CLP",
+    "s2_cirrus_flag",
+    "s2_high_cloud_flag",
+    "s2_medium_cloud_flag",
+    "s2_aerosol_AOT",
+    "era5_surface_solar_radiation_downwards_clear_sky",
+    "era5_2m_dewpoint_temperature",
+    "era5_total_column_water_vapour",
+    "era5_surface_pressure",
+    "era5_wind_speed_10m"
+  ],
+  "target_channels": [
+    "shortwave_cloud_attenuation",
+    "temperature_anomaly"
+  ],
+  "x_series_shape": [
+    497,
+    12,
+    64,
+    64
+  ],
+  "y_series_shape": [
+    497,
+    2,
+    64,
+    64
+  ],
+  "input_len": 8,
+  "horizon": 1,
+  "train_windows": 267,
+  "val_windows": 70,
+  "test_windows": 80,
+  "notes": [
+    "x_series/y_series are normalized with train-state statistics.",
+    "Window CSVs prevent crossing location boundaries.",
+    "Targets are current-state maps; training Dataset uses future windows.",
+    "cloudforce target shortwave_cloud_attenuation is (sun_context - all_sky_shortwave) / sun_context.",
+    "temperature_anomaly is computed as per-location day-of-year-bin anomaly when present.",
+    "max_gap_days=12.0"
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "split": "val",
+  "num_windows": 70,
+  "target_names": [
+    "shortwave_cloud_attenuation_next_5day",
+    "temperature_anomaly_next_5day"
+  ],
+  "cloud_channel_indices": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "model_losses": {
+    "normal": 0.4530962562986783,
+    "no_cloud": 0.5897603741713933,
+    "cloud_shuffle": 0.4975552294935499,
+    "no_noncloud": 0.6222637363842556,
+    "all_zero_input": 0.6787623626845224
+  },
+  "files": {
+    "metrics_csv": "diagnostics\\cloudforce_val\\metrics_by_channel.csv",
+    "sensitivity_csv": "diagnostics\\cloudforce_val\\prediction_sensitivity.csv",
+    "worst_csv": "diagnostics\\cloudforce_val\\worst_windows.csv",
+    "input_channel_importance_csv": "diagnostics\\cloudforce_val\\input_channel_importance.csv"
+  }
+}
