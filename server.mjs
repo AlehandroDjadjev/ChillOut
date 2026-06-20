@@ -340,6 +340,8 @@ async function handleStatistics(request, response) {
   const source = normalizeSource(body.source);
   const field = String(body.field || "").trim();
   const days = clampNumber(body.days, 1, 30, latestItemCount);
+  const startDate = parseIsoDate(body.startDate || body.start_date);
+  const endDate = parseIsoDate(body.endDate || body.end_date);
   const bbox = parseBbox(body.bbox) || getPublicConfig().bbox;
 
   if (source === "era5") {
@@ -367,6 +369,8 @@ async function handleStatistics(request, response) {
     field,
     fieldMeta,
     days,
+    startDate,
+    endDate,
     bbox,
   });
 
@@ -460,13 +464,23 @@ async function fetchCopernicusScenes({ source, collection, limit }) {
     .slice(0, limit);
 }
 
-async function fetchCopernicusStatisticsSeries({ source, field, fieldMeta, days, bbox }) {
+async function fetchCopernicusStatisticsSeries({ source, field, fieldMeta, days, startDate, endDate, bbox }) {
   const accessToken = await getAccessToken();
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  end.setUTCDate(end.getUTCDate() + 1);
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - days);
+  let start;
+  let end;
+
+  if (startDate && endDate) {
+    start = new Date(`${startDate}T00:00:00Z`);
+    end = new Date(`${endDate}T00:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + 1);
+  } else {
+    end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+    end.setUTCDate(end.getUTCDate() + 1);
+    start = new Date(end);
+    start.setUTCDate(start.getUTCDate() - days);
+  }
+
   const requestBody = buildStatisticsRequest({
     source,
     field,
@@ -513,8 +527,9 @@ async function fetchCopernicusStatisticsSeries({ source, field, fieldMeta, days,
     });
   }
 
-  return buildRecentDays(days)
-    .reverse()
+  const dates = startDate && endDate ? buildDateRange(startDate, endDate) : buildRecentDays(days).reverse();
+
+  return dates
     .map((date) =>
       statsByDate.get(date) || {
         date,
@@ -1154,8 +1169,26 @@ function buildRecentDays(count) {
   return dates;
 }
 
+function buildDateRange(startDate, endDate) {
+  const dates = [];
+  const cursor = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+
+  while (cursor <= end) {
+    dates.push(toIsoDate(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
 function toIsoDate(date) {
   return date.toISOString().slice(0, 10);
+}
+
+function parseIsoDate(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : null;
 }
 
 function bboxCenter(bbox) {
