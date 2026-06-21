@@ -59,11 +59,20 @@
     try {
       var place = await resolvePlace();
       sample = await C.fetchWeatherSample(place, el.date.value);
-      maskDataUrl = C.drawMask(el.canvas, sample);
-      el.caption.textContent = sample.city + ", " + sample.country + " - " + sample.date;
+      var maskSource = "generated mask";
+      try {
+        if (!silent) setStatus("Fetching the latest Sentinel-2 scene for " + sample.date + "...");
+        var sentinelUrl = await C.fetchSentinelImage(sample, "cloud_mask");
+        maskDataUrl = await C.loadImageToCanvas(sentinelUrl, el.canvas);
+        maskSource = "Sentinel-2 cloud mask";
+      } catch (sentinelError) {
+        maskDataUrl = C.drawMask(el.canvas, sample);
+        maskSource = "preview mask (Sentinel-2 unavailable: " + (sentinelError.message || sentinelError) + ")";
+      }
+      el.caption.textContent = sample.city + ", " + sample.country + " - " + sample.date + " - " + maskSource;
       renderFeatureTable();
       renderPayload();
-      setStatus("Sample ready: " + sample.sample_id, "ok");
+      setStatus("Sample ready: " + sample.sample_id + " (" + maskSource + ")", "ok");
     } catch (error) {
       setStatus(error.message || String(error), "error");
     } finally {
