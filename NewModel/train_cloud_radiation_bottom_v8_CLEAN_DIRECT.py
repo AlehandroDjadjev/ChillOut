@@ -211,7 +211,9 @@ class RadiationSequenceDataset(Dataset):
     def __init__(self, root: Path, records: List[Dict[str, Any]], raw_names: List[str],
                  cloud_names: List[str], x_norm, image_height: int, image_width: int,
                  lookback: int, max_gap_days: float, use_cloud_tensor: bool, augment: bool,
-                 min_clear_wm2: float = 120.0):
+                 min_clear_wm2: float = 120.0, target_min_attenuation: float = 0.0,
+                 target_max_attenuation: float = 1.2, target_min_loss_wm2: float = -100.0,
+                 target_max_loss_wm2: Optional[float] = None):
         self.root = root
         self.raw_names = raw_names
         self.cloud_names = cloud_names
@@ -221,6 +223,10 @@ class RadiationSequenceDataset(Dataset):
         self.use_cloud_tensor = use_cloud_tensor
         self.augment = augment
         self.min_clear_wm2 = float(min_clear_wm2)
+        self.target_min_attenuation = float(target_min_attenuation)
+        self.target_max_attenuation = float(target_max_attenuation)
+        self.target_min_loss_wm2 = float(target_min_loss_wm2)
+        self.target_max_loss_wm2 = None if target_max_loss_wm2 is None else float(target_max_loss_wm2)
         raw_to_idx = {n: i for i, n in enumerate(raw_names)}
         self.cloud_idx = [raw_to_idx[n] for n in cloud_names]
         self.windows = base.build_windows(records, lookback, max_gap_days)
@@ -250,8 +256,9 @@ class RadiationSequenceDataset(Dataset):
             valid = 0.0
         attn = float(rb["attenuation"])
         # Robust bounded targets.
-        attn = float(max(0.0, min(1.2, attn)))
-        loss = float(max(-100.0, min(max(clear, 0.0), loss)))
+        attn = float(max(self.target_min_attenuation, min(self.target_max_attenuation, attn)))
+        max_loss = max(clear, 0.0) if self.target_max_loss_wm2 is None else self.target_max_loss_wm2
+        loss = float(max(self.target_min_loss_wm2, min(max_loss, loss)))
         return {
             "image": torch.stack(imgs, 0),                         # [T,C,H,W]
             "cloud_features": torch.from_numpy(np.stack(feats).astype(np.float32)),
@@ -541,6 +548,10 @@ def main():
     ap.add_argument("--dropout", type=float, default=0.12)
     ap.add_argument("--loss-scale", type=float, default=300.0)
     ap.add_argument("--min-clear-wm2", type=float, default=120.0, help="Ignore very low clear-sky scenes in radiation loss/eval because they are noisy and weakly controllable.")
+    ap.add_argument("--target-min-attenuation", type=float, default=0.0)
+    ap.add_argument("--target-max-attenuation", type=float, default=1.2)
+    ap.add_argument("--target-min-loss-wm2", type=float, default=-100.0)
+    ap.add_argument("--target-max-loss-wm2", type=float, default=None, help="Clamp target cloud loss upper bound. Default keeps old behavior: max(clear_wm2, 0).")
     ap.add_argument("--residual-factor", type=float, default=0.05, help="Auxiliary physics-head residual strength after attenuation*clear_sky.")
     ap.add_argument("--max-direct-loss-wm2", type=float, default=900.0)
     ap.add_argument("--final-blend-direct", type=float, default=1.0, help="1.0 means final prediction is direct cloud loss. 0.0 means final prediction is physics attenuation head.")
@@ -594,6 +605,10 @@ def main():
         lookback=args.lookback, max_gap_days=args.max_gap_days,
         use_cloud_tensor=args.use_cloud_tensor,
         min_clear_wm2=args.min_clear_wm2,
+        target_min_attenuation=args.target_min_attenuation,
+        target_max_attenuation=args.target_max_attenuation,
+        target_min_loss_wm2=args.target_min_loss_wm2,
+        target_max_loss_wm2=args.target_max_loss_wm2,
     )
     train_ds = RadiationSequenceDataset(records=train_records, augment=args.augment, **ds_args)
     val_ds = RadiationSequenceDataset(records=val_records, augment=False, **ds_args)
@@ -643,6 +658,12 @@ def main():
         "train_radiation_stats": rad_stats,
         "initial_attenuation_prior": rad_stats["mean_attn"],
         "min_clear_wm2": args.min_clear_wm2,
+        "target_clamps": {
+            "min_attenuation": args.target_min_attenuation,
+            "max_attenuation": args.target_max_attenuation,
+            "min_loss_wm2": args.target_min_loss_wm2,
+            "max_loss_wm2": args.target_max_loss_wm2,
+        },
         "residual_factor": args.residual_factor,
         "max_direct_loss_wm2": args.max_direct_loss_wm2,
         "final_blend_direct": args.final_blend_direct,

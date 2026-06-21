@@ -367,12 +367,18 @@ def download_s2_cloud_tensor(
     size: Tuple[int, int],
     out_npz: Path,
     out_png: Path,
+    style_filter: Optional[Dict[str, float]] = None,
     retries: int = 3,
 ) -> Optional[Dict[str, float]]:
     if out_npz.exists() and out_png.exists():
         try:
             arr = np.load(out_npz)["cloud_tensor"]
-            return compute_cloud_features(arr)
+            features = compute_cloud_features(arr)
+            reason = cloud_style_drop_reason(arr, style_filter)
+            if reason is not None:
+                print(f"[S2 STYLE DROP cached] {scene.location} {scene.timestamp}: {reason}", file=sys.stderr)
+                return None
+            return features
         except Exception:
             pass
 
@@ -402,6 +408,12 @@ def download_s2_cloud_tensor(
             if arr.ndim != 3 or arr.shape[-1] != 8:
                 raise RuntimeError(f"Unexpected cloud tensor shape {arr.shape}")
 
+            features = compute_cloud_features(arr)
+            reason = cloud_style_drop_reason(arr, style_filter)
+            if reason is not None:
+                print(f"[S2 STYLE DROP] {scene.location} {scene.timestamp}: {reason}", file=sys.stderr)
+                return None
+
             ensure_dir(out_npz.parent)
             ensure_dir(out_png.parent)
             np.savez_compressed(out_npz, cloud_tensor=arr)
@@ -413,7 +425,7 @@ def download_s2_cloud_tensor(
             png = np.clip(cloud_img * 255.0, 0, 255).astype(np.uint8)
             Image.fromarray(png, mode="L").save(out_png)
 
-            return compute_cloud_features(arr)
+            return features
         except Exception as e:
             last_error = e
             if attempt < retries:
@@ -437,6 +449,55 @@ def compute_edge_density(mask: np.ndarray) -> float:
     dx = np.abs(m[:, 1:] - m[:, :-1]).mean() if m.shape[1] > 1 else 0.0
     dy = np.abs(m[1:, :] - m[:-1, :]).mean() if m.shape[0] > 1 else 0.0
     return float((dx + dy) / 2.0)
+
+
+def compute_cloud_style_stats(
+    arr: np.ndarray,
+    mask_channel: int = 0,
+    white_threshold: float = 0.95,
+    black_threshold: float = 0.02,
+) -> Dict[str, float]:
+    x = np.asarray(arr, dtype=np.float32)
+    if x.ndim == 2:
+        x = x[..., None]
+    if x.ndim == 3:
+        chw = np.moveaxis(x, -1, 0)[None]
+    elif x.ndim == 4:
+        chw = np.moveaxis(x, -1, 1) if x.shape[-1] <= 16 else x
+    else:
+        raise ValueError(f"unexpected tensor shape {x.shape}")
+
+    _, c, _, _ = chw.shape
+    ch = min(int(mask_channel), c - 1)
+    mask = np.clip(chw[:, ch], 0.0, 1.0)
+    white = mask >= float(white_threshold)
+    black = mask <= float(black_threshold)
+    return {
+        "style_mask_channel": float(ch),
+        "style_white_frac": float(white.mean()),
+        "style_black_frac": float(black.mean()),
+        "style_midgray_frac": float(((mask > float(black_threshold)) & (mask < float(white_threshold))).mean()),
+        "style_mask_mean": float(mask.mean()),
+        "style_mask_std": float(mask.std()),
+    }
+
+
+def cloud_style_drop_reason(arr: np.ndarray, style_filter: Optional[Dict[str, float]]) -> Optional[str]:
+    if not style_filter or not bool(style_filter.get("enabled", True)):
+        return None
+    stats = compute_cloud_style_stats(
+        arr,
+        mask_channel=int(style_filter.get("mask_channel", 0)),
+        white_threshold=float(style_filter.get("white_threshold", 0.95)),
+        black_threshold=float(style_filter.get("black_threshold", 0.02)),
+    )
+    max_white = float(style_filter.get("max_white_frac", 0.95))
+    max_black = float(style_filter.get("max_black_frac", 0.95))
+    if stats["style_white_frac"] >= max_white:
+        return f"too_white_white_frac_{stats['style_white_frac']:.4f}_max_{max_white:.4f}"
+    if stats["style_black_frac"] >= max_black:
+        return f"too_black_black_frac_{stats['style_black_frac']:.4f}_max_{max_black:.4f}"
+    return None
 
 
 def compute_cloud_features(arr: np.ndarray) -> Dict[str, float]:
@@ -665,15 +726,26 @@ def solar_clear_sky_proxy_wm2(lat: float, lon: float, dt: datetime) -> float:
     return float(max(0.0, clear))
 
 
-def radiation_targets_from_shortwave(loc: Location, timestamp: datetime, observed_shortwave_wm2: float) -> Dict[str, float]:
+def radiation_targets_from_shortwave(
+    loc: Location,
+    timestamp: datetime,
+    observed_shortwave_wm2: float,
+    daylight_clear_threshold_wm2: float = 50.0,
+    min_transmission: float = 0.0,
+    max_transmission: float = 1.5,
+    min_attenuation: float = -0.5,
+    max_attenuation: float = 1.2,
+    min_loss_wm2: float = -250.0,
+    max_loss_wm2: float = 1200.0,
+) -> Dict[str, float]:
     clear = solar_clear_sky_proxy_wm2(loc.lat, loc.lon, timestamp)
     observed = float(observed_shortwave_wm2)
-    daylight = 1.0 if clear >= 50.0 else 0.0
+    daylight = 1.0 if clear >= float(daylight_clear_threshold_wm2) else 0.0
 
     if daylight > 0:
-        transmission = max(0.0, min(1.5, observed / max(clear, 1e-6)))
-        attenuation = max(-0.5, min(1.2, 1.0 - transmission))
-        loss = max(-250.0, min(1200.0, clear - observed))
+        transmission = max(float(min_transmission), min(float(max_transmission), observed / max(clear, 1e-6)))
+        attenuation = max(float(min_attenuation), min(float(max_attenuation), 1.0 - transmission))
+        loss = max(float(min_loss_wm2), min(float(max_loss_wm2), clear - observed))
     else:
         transmission = 1.0
         attenuation = 0.0
@@ -761,6 +833,19 @@ def main() -> int:
     parser.add_argument("--openmeteo-continue-on-fail", action="store_true", help="Skip failed locations instead of aborting.")
     parser.add_argument("--openmeteo-model", default="best_match")
     parser.add_argument("--target-offset-days", type=float, default=5.0)
+    parser.add_argument("--disable-style-filter", action="store_true", help="Disable automatic white/black cloud-mask fraction filtering.")
+    parser.add_argument("--style-mask-channel", type=int, default=0)
+    parser.add_argument("--style-white-threshold", type=float, default=0.95)
+    parser.add_argument("--style-black-threshold", type=float, default=0.02)
+    parser.add_argument("--style-max-white-frac", type=float, default=0.95)
+    parser.add_argument("--style-max-black-frac", type=float, default=0.95)
+    parser.add_argument("--radiation-daylight-clear-threshold-wm2", type=float, default=50.0)
+    parser.add_argument("--radiation-min-transmission", type=float, default=0.0)
+    parser.add_argument("--radiation-max-transmission", type=float, default=1.5)
+    parser.add_argument("--radiation-min-attenuation", type=float, default=-0.5)
+    parser.add_argument("--radiation-max-attenuation", type=float, default=1.2)
+    parser.add_argument("--radiation-min-loss-wm2", type=float, default=-250.0)
+    parser.add_argument("--radiation-max-loss-wm2", type=float, default=1200.0)
     parser.add_argument("--skip-torch", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -781,6 +866,14 @@ def main() -> int:
     size = image_size_from_patch(args.patch_km, args.resolution_m)
 
     sh_config = make_sh_config()
+    style_filter = {
+        "enabled": not bool(args.disable_style_filter),
+        "mask_channel": int(args.style_mask_channel),
+        "white_threshold": float(args.style_white_threshold),
+        "black_threshold": float(args.style_black_threshold),
+        "max_white_frac": float(args.style_max_white_frac),
+        "max_black_frac": float(args.style_max_black_frac),
+    }
 
     loc_bboxes: Dict[str, Tuple[float, float, float, float]] = {}
     scenes_by_loc: Dict[str, List[SentinelScene]] = {}
@@ -868,13 +961,27 @@ def main() -> int:
             size=size,
             out_npz=out_dir / rel_npz,
             out_png=out_dir / rel_png,
+            style_filter=style_filter,
         )
         if cloud_features is None:
             return None
 
         world_features = world_features_from_row(weather_now)
-        radiation_targets = radiation_targets_from_shortwave(loc, ts, float(weather_now.get("shortwave_radiation", 0.0)))
-        target_radiation_targets = radiation_targets_from_shortwave(loc, target_ts, float(weather_target.get("shortwave_radiation", 0.0)))
+        radiation_kwargs = dict(
+            daylight_clear_threshold_wm2=float(args.radiation_daylight_clear_threshold_wm2),
+            min_transmission=float(args.radiation_min_transmission),
+            max_transmission=float(args.radiation_max_transmission),
+            min_attenuation=float(args.radiation_min_attenuation),
+            max_attenuation=float(args.radiation_max_attenuation),
+            min_loss_wm2=float(args.radiation_min_loss_wm2),
+            max_loss_wm2=float(args.radiation_max_loss_wm2),
+        )
+        radiation_targets = radiation_targets_from_shortwave(
+            loc, ts, float(weather_now.get("shortwave_radiation", 0.0)), **radiation_kwargs
+        )
+        target_radiation_targets = radiation_targets_from_shortwave(
+            loc, target_ts, float(weather_target.get("shortwave_radiation", 0.0)), **radiation_kwargs
+        )
         inputs = {**cloud_features, **world_features}
 
         if any(name not in inputs or not math.isfinite(float(inputs[name])) for name in RAW_FEATURE_NAMES):
@@ -950,6 +1057,16 @@ def main() -> int:
             "radiation_daylight_valid"
         ],
         "radiation_target_description": "Scene-time shortwave cloud effect derived from Open-Meteo shortwave radiation and a simple solar clear-sky proxy.",
+        "style_filter": style_filter,
+        "radiation_thresholds": {
+            "daylight_clear_threshold_wm2": float(args.radiation_daylight_clear_threshold_wm2),
+            "min_transmission": float(args.radiation_min_transmission),
+            "max_transmission": float(args.radiation_max_transmission),
+            "min_attenuation": float(args.radiation_min_attenuation),
+            "max_attenuation": float(args.radiation_max_attenuation),
+            "min_loss_wm2": float(args.radiation_min_loss_wm2),
+            "max_loss_wm2": float(args.radiation_max_loss_wm2),
+        },
         "raw_feature_names": RAW_FEATURE_NAMES,
         "model_feature_names": RAW_FEATURE_NAMES,
         "cloud_feature_names": CLOUD_FEATURE_NAMES,
