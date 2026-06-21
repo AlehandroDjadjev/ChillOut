@@ -145,8 +145,8 @@
         <p class="kicker reveal" data-reveal>02 - Model demos</p>
         <h2 class="section__title reveal" data-reveal>Show the trained-model<br /><em>interfaces</em>.</h2>
         <p class="section__lead reveal" data-reveal data-delay="1">
-          These pages are frontend-ready showcases for the two model flows. They fetch or accept
-          model-shaped inputs today, then expose a small endpoint boundary for real hosted inference later.
+          These pages expose the trained-model flows through the hosted ChillOut interface: live samples,
+          generated cloud states, and verification outputs.
         </p>
       </div>
       <div class="model-links">
@@ -157,8 +157,13 @@
         </a>
         <a class="model-link glass reveal" data-reveal data-delay="1" href="rl-inference/index.html">
           <span class="lab-pill">model 02</span>
-          <h3>RL Inference Runner</h3>
-          <p>Upload trained RL weights and a stats file, fetch a live Sentinel-2 cloud mask, and run the real policy on a backend worker to get the generated mask and action data.</p>
+          <h3>Live Cloud Seeder</h3>
+          <p>Fetch a live Sentinel-2 cloud mask and same-date weather inputs, then run the installed cloud model on the backend worker.</p>
+        </a>
+        <a class="model-link glass reveal" data-reveal data-delay="2" href="cloud-model/index.html">
+          <span class="lab-pill">model 03</span>
+          <h3>Cloud Model Visualizer</h3>
+          <p>Run the full cloud template selector and radiation verifier from the hosted app against dataset samples.</p>
         </a>
       </div>
     </section>

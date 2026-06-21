@@ -116,6 +116,21 @@
   font-size: 0.82rem;
 }
 
+.lab-check {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.86rem;
+}
+
+.lab-check input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--primary);
+}
+
 .lab-form input,
 .lab-form select,
 .lab-form textarea {
@@ -194,6 +209,10 @@
   gap: 0.8rem;
 }
 
+.lab-metrics--compact .lab-metric b {
+  font-size: clamp(1rem, 2vw, 1.35rem);
+}
+
 .lab-metric {
   padding: 0.9rem;
   border: 1px solid var(--line);
@@ -226,6 +245,10 @@
 
 .lab-visual--single {
   grid-template-columns: 1fr;
+}
+
+.lab-visual--wrap {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 .lab-frame {

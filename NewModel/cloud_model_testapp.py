@@ -276,7 +276,7 @@ APP_HTML = r"""
 <main>
   <header>
     <div>
-      <h1>Cloud Template Selector V13 Test App</h1>
+      <h1>Cloud Model Visualizer</h1>
       <div class="sub">Top model generates the cloud state; bottom V8 model verifies radiation and temperature proxy.</div>
     </div>
     <div class="status" id="status">Loading models...</div>
@@ -330,7 +330,7 @@ APP_HTML = r"""
       </section>
       <div class="tables">
         <section class="table-wrap">
-          <h2>Selected Templates</h2>
+          <h2>Template Scores</h2>
           <table id="templateTable"><tbody></tbody></table>
         </section>
         <section class="table-wrap">
@@ -389,10 +389,8 @@ function renderResult(data) {
       <div class="image-grid">
         ${imageFigure(data.images.original, "Original sample")}
         ${imageFigure(data.images.model_input, "Model input")}
-        ${imageFigure(data.images.selected_template, "Selected cloud template")}
         ${imageFigure(data.images.generated, "Generated and verified")}
         ${imageFigure(data.images.original_mask, "Original cloud mask")}
-        ${imageFigure(data.images.template_mask, "Template cloud mask")}
         ${imageFigure(data.images.generated_mask, "Generated cloud mask")}
         ${imageFigure(data.images.added_delta, "Delta: added red, removed blue")}
       </div>
@@ -404,7 +402,7 @@ function renderResult(data) {
         ${imageFigure(data.images.channels, "Generated channels")}
         <figure>
           <figcaption>
-            Chosen template: ${c.template_location || "unknown"} / ${c.template_sample_id || "no id"}<br>
+            Chosen template metadata: ${c.template_location || "unknown"} / ${c.template_sample_id || "no id"}<br>
             Chosen error: ${fmt(c.abs_error_wm2, 2)} W/m2 | coverage ${fmt(c.coverage, 3)} | L1 ${fmt(c.image_l1_vs_input, 4)}<br>
             Dataset future temp: ${fmt(s.dataset_future_temperature_c, 2)} C | current ${fmt(s.current_temperature_c, 2)} C
           </figcaption>

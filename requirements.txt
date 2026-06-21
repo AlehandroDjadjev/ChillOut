@@ -9,3 +9,5 @@ pyproj
 sentinelhub
 scikit-learn
 python-dotenv
+fastapi
+uvicorn

@@ -639,10 +639,8 @@ class CloudTemplateInference:
             "images": {
                 "original": png_data_url(tensor_to_cloud_photo(image)),
                 "model_input": png_data_url(tensor_to_cloud_photo(input_img)),
-                "selected_template": png_data_url(tensor_to_cloud_photo(chosen_template)),
                 "generated": png_data_url(tensor_to_cloud_photo(chosen_output)),
                 "original_mask": png_data_url(tensor_to_cloud_mask(image)),
-                "template_mask": png_data_url(tensor_to_cloud_mask(chosen_template)),
                 "generated_mask": png_data_url(tensor_to_cloud_mask(chosen_output)),
                 "added_delta": png_data_url(tensor_added_delta(input_img, chosen_output)),
                 "original_strip": png_data_url(tensor_to_strip(image)),
@@ -839,7 +837,6 @@ class CloudTemplateInference:
             "images": {
                 "original": png_data_url(tensor_to_cloud_photo(image)),
                 "model_input": png_data_url(tensor_to_cloud_photo(input_img)),
-                "selected_template": png_data_url(tensor_to_cloud_photo(chosen_template)),
                 "generated": png_data_url(tensor_to_cloud_photo(chosen_output)),
                 "original_mask": tensor_channel_data_url(image, channel=0),
                 "generated_mask": tensor_channel_data_url(chosen_output, channel=0),

@@ -7,6 +7,7 @@ const root = process.cwd();
 const port = Number(process.env.PORT || 5173);
 const maxBodyBytes = 2_000_000;
 const latestItemCount = 7;
+let modelApiHandlerPromise = null;
 
 const defaults = {
   tokenUrl:
@@ -200,6 +201,16 @@ const server = createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/statistics") {
       await handleStatistics(request, response);
+      return;
+    }
+
+    if ((request.method === "POST" || request.method === "OPTIONS") && url.pathname === "/api/model") {
+      await handleModelApi(request, response);
+      return;
+    }
+
+    if (url.pathname.startsWith("/api/cloud-model/")) {
+      await handleCloudModelProxy(request, response, url);
       return;
     }
 
@@ -1020,6 +1031,11 @@ async function getAccessToken() {
 }
 
 async function readJsonBody(request) {
+  const text = await readRequestBodyText(request);
+  return text ? JSON.parse(text) : {};
+}
+
+async function readRequestBodyText(request) {
   const chunks = [];
   let size = 0;
 
@@ -1033,8 +1049,73 @@ async function readJsonBody(request) {
     chunks.push(chunk);
   }
 
-  const text = Buffer.concat(chunks).toString("utf8");
-  return text ? JSON.parse(text) : {};
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function getModelApiHandler() {
+  if (!modelApiHandlerPromise) {
+    modelApiHandlerPromise = import(new URL("./functions/api/index.mjs", import.meta.url).href)
+      .then((module) => {
+        if (typeof module.handler !== "function") {
+          throw new Error("functions/api/index.mjs does not export a handler.");
+        }
+        return module.handler;
+      });
+  }
+  return modelApiHandlerPromise;
+}
+
+async function handleModelApi(request, response) {
+  const handler = await getModelApiHandler();
+  const body = request.method === "OPTIONS" ? "" : await readRequestBodyText(request);
+  const result = await handler({
+    body,
+    headers: request.headers,
+    requestContext: {
+      http: {
+        method: request.method,
+      },
+    },
+  });
+  response.writeHead(result.statusCode || 200, {
+    "Cache-Control": "no-store",
+    ...(result.headers || {}),
+  });
+  response.end(result.body || "");
+}
+
+async function handleCloudModelProxy(request, response, url) {
+  const base = (process.env.CLOUD_MODEL_TESTAPP_URL || "http://127.0.0.1:7860").replace(/\/$/, "");
+  const path = url.pathname.replace(/^\/api\/cloud-model/, "/api");
+  const upstream = `${base}${path}${url.search || ""}`;
+  const method = request.method || "GET";
+  const body = method === "GET" || method === "HEAD" ? undefined : await readRequestBodyText(request);
+
+  let upstreamResponse;
+  try {
+    upstreamResponse = await fetch(upstream, {
+      method,
+      headers: {
+        "content-type": request.headers["content-type"] || "application/json",
+      },
+      body,
+    });
+  } catch (error) {
+    sendJson(response, 503, {
+      detail:
+        `Cloud model service is not reachable at ${base}. ` +
+        "Start NewModel/cloud_model_testapp.py in the hosted container or set CLOUD_MODEL_TESTAPP_URL.",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+
+  const text = await upstreamResponse.text();
+  response.writeHead(upstreamResponse.status, {
+    "Content-Type": upstreamResponse.headers.get("content-type") || "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+  });
+  response.end(text);
 }
 
 async function serveStatic(pathname, response, headOnly) {

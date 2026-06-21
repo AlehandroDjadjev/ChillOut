@@ -30,10 +30,20 @@
     { name: "Madrid", country: "Spain", lat: 40.4168, lon: -3.7038 }
   ];
 
-  var DEFAULT_API_BASE = "https://7mfql7bgxtukoux34v3g26nbie0axyyc.lambda-url.eu-central-1.on.aws/";
+  function getDefaultApiBase() {
+    if (typeof window !== "undefined" && window.location) {
+      var host = window.location.hostname || "";
+      if (host === "localhost" || host === "127.0.0.1") {
+        return window.location.origin.replace(/\/$/, "") + "/api/model";
+      }
+    }
+    return "https://7mfql7bgxtukoux34v3g26nbie0axyyc.lambda-url.eu-central-1.on.aws/";
+  }
 
   function getConfig() {
     var globalConfig = window.ChillOutModelConfig || {};
+    var localApiBase = getDefaultApiBase();
+    var isLocalDevApi = /\/api\/model$/.test(localApiBase);
     return {
       temperatureEndpoint:
         globalConfig.temperatureEndpoint ||
@@ -45,8 +55,7 @@
         "",
       apiBase:
         globalConfig.apiBase ||
-        localStorage.getItem("chillout.apiBase") ||
-        DEFAULT_API_BASE
+        (isLocalDevApi ? localApiBase : (localStorage.getItem("chillout.apiBase") || localApiBase))
     };
   }
 

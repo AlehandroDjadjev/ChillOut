@@ -50,6 +50,13 @@ Backend cloud model inference worker:
 - `CLOUD_MODEL_RUN_ORACLE`: optional `0` to skip the oracle template search.
 - `CLOUD_MODEL_WM2_PER_C`: optional temperature/radiation proxy scale, default `80`.
 
+Hosted cloud model visualizer:
+
+- `site/cloud-model/`: hosted frontend page for the dataset-based cloud model test app.
+- `CLOUD_MODEL_TESTAPP_URL`: optional URL for the Python cloud model API; `server.mjs` proxies `/api/cloud-model/*` to it. Defaults to `http://127.0.0.1:7860`.
+- `scripts/run_hosted_cloud_model.sh`: starts both `NewModel/cloud_model_testapp.py` and the site server in one container/process environment.
+- `Dockerfile`: builds a combined Node + Python image for hosting the site and model API together. The model artifacts still need to be present in the image or mounted at runtime under `NewModel/`.
+
 ## Security Note
 
 Keep `.env` private. The page no longer sends your client secret to the browser.

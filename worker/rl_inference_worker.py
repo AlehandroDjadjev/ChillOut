@@ -107,7 +107,6 @@ def process_job(job):
         "generated_mask_data_url": images.get("generated_mask") or images.get("generated"),
         "property_maps": {
             "generated_cloud_scene": images.get("generated"),
-            "selected_template": images.get("selected_template"),
             "generated_channels": images.get("channels"),
             "original_sequence": images.get("original_strip"),
             "generated_sequence": images.get("generated_strip"),
