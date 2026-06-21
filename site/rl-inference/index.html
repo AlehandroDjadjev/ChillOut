@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChillOut - RL Inference Runner</title>
+  <meta name="description" content="Upload an RL checkpoint and run it server-side on a live Sentinel-2 cloud mask: weights and inference execute in the backend, the generated mask and actions come back to the browser." />
+  <meta name="theme-color" content="#081317" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/styles.css?v=13" />
+  <link rel="stylesheet" href="../css/animations.css?v=13" />
+  <link rel="stylesheet" href="../model-lab/model-lab.css?v=13" />
+</head>
+<body class="lab-body">
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a class="brand" href="../index.html" aria-label="ChillOut home">
+        <svg class="brand__mark" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M10 18a5.5 5.5 0 0 1 .5-10.97A6.5 6.5 0 0 1 22.5 8.5a5 5 0 0 1-.5 9.98z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 22l-1.4 3M16 22l-1.4 3M20 22l-1.4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">ChillOut</span>
+      </a>
+      <span class="nav__tag">RL Inference Runner</span>
+      <a href="../cloud-rl/index.html" class="btn btn--ghost nav__cta">Planner Showcase</a>
+    </div>
+  </header>
+
+  <main class="lab">
+    <section class="lab__head reveal" data-reveal>
+      <p class="kicker">Live model runner</p>
+      <h1 class="lab__title">Upload <em>real RL weights</em> and run them on a live cloud mask.</h1>
+      <p class="lab__lead">
+        Pick a place and date, upload a trained checkpoint (<code>.pt</code>) and its
+        <code>stats.json</code>, then hit Run. The checkpoint is uploaded straight to storage, the
+        latest Sentinel-2 cloud mask is fetched for your area, and a backend worker loads the weights
+        and runs the policy on a VM (PyTorch can't run in the function itself). The generated mask,
+        action tokens, and property maps are returned here when the job finishes.
+      </p>
+    </section>
+
+    <div class="lab__grid">
+      <aside class="lab__stack">
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Inference input</h2>
+              <p>Choose the location, target, and the weights to run.</p>
+            </div>
+            <span class="lab-pill">checkpoint + data</span>
+          </div>
+          <form id="inferForm" class="lab-form">
+            <label>Place
+              <input id="placeInput" type="text" value="Plovdiv, Bulgaria" autocomplete="off" />
+            </label>
+            <div class="lab-form__row">
+              <label>Preset
+                <select id="presetSelect"></select>
+              </label>
+              <label>Date
+                <input id="dateInput" type="date" />
+              </label>
+            </div>
+            <label>Target temperature C
+              <input id="targetInput" type="number" step="0.1" value="17.0" />
+            </label>
+            <label class="lab-file">Checkpoint (.pt) — required
+              <input id="checkpointInput" type="file" accept=".pt,.pth,.ckpt,application/octet-stream" />
+            </label>
+            <label class="lab-file">Normalization stats (stats.json) — recommended
+              <input id="statsInput" type="file" accept=".json,application/json" />
+            </label>
+            <p id="status" class="lab-status" role="status"></p>
+            <div class="lab-actions">
+              <button type="button" id="sampleBtn" class="btn btn--ghost">Preview mask</button>
+              <button type="submit" id="runBtn" class="btn btn--primary">
+                Run inference
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="lab-card glass">
+          <h2>Raw feature vector</h2>
+          <table class="lab-table" id="featureTable">
+            <tbody></tbody>
+          </table>
+        </section>
+      </aside>
+
+      <section class="lab__stack">
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Before / after cloud masks</h2>
+              <p>Original is the live Sentinel-2 mask; generated comes from your uploaded policy.</p>
+            </div>
+            <span id="modePill" class="lab-pill">waiting</span>
+          </div>
+          <div class="lab-visual">
+            <figure class="lab-frame">
+              <canvas id="originalCanvas" width="256" height="256" aria-label="Original cloud mask"></canvas>
+              <figcaption id="originalCaption">Original mask</figcaption>
+            </figure>
+            <figure class="lab-frame">
+              <img id="generatedImage" alt="Generated cloud mask" />
+              <figcaption id="generatedCaption">Generated mask</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Property maps</h2>
+              <p>Per-pixel channels the policy emits alongside the mask edit.</p>
+            </div>
+          </div>
+          <div class="lab-visual lab-visual--wrap" id="propertyMaps"></div>
+        </section>
+
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Actions and metrics</h2>
+              <p>Decoded intervention tokens from the deterministic policy.</p>
+            </div>
+          </div>
+          <div class="lab-metrics" id="metrics">
+            <div class="lab-metric"><b>-</b><span>Actions emitted</span></div>
+            <div class="lab-metric"><b>-</b><span>Target temperature</span></div>
+            <div class="lab-metric"><b>-</b><span>Normalization</span></div>
+          </div>
+          <pre id="actionsJson" class="lab-json">[]</pre>
+        </section>
+
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Job payload</h2>
+              <p>What is queued to the backend (long data URLs omitted for readability).</p>
+            </div>
+          </div>
+          <pre id="payloadJson" class="lab-json">{}</pre>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="../js/reveal.js?v=13" defer></script>
+  <script src="../model-lab/model-contracts.js?v=15"></script>
+  <script src="rl-inference.js?v=1"></script>
+</body>
+</html>
