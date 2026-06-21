@@ -22,7 +22,7 @@ function clampNumber(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
-async function getAccessToken() {
+export async function getAccessToken() {
   const now = Math.floor(Date.now() / 1000);
   if (tokenCache && tokenCache.expiresAt - 60 > now) {
     return tokenCache.accessToken;

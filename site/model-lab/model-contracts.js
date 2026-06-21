@@ -129,7 +129,88 @@
     };
   }
 
+  // Derive the 8 satellite-ish fields from coarse weather inputs. Used as a preview when the real
+  // Copernicus stats are unavailable, and to fill any single field a satellite pass missed.
+  function deriveSatelliteInputs(w) {
+    var cloudFraction = clamp((w.cloudCover || 0) / 100, 0, 1);
+    var humidity = Number.isFinite(w.humidity) ? w.humidity : clamp(40 + cloudFraction * 45, 0, 100);
+    var precipitation = w.precipitation || 0;
+    var windSpeed = w.windSpeed || 0;
+    var temperature = Number.isFinite(w.temperature) ? w.temperature : 15;
+    var opticalThickness = clamp(2 + cloudFraction * 34 + precipitation * 1.6 + humidity * 0.04, 0, 100);
+    var cloudTopHeight = clamp(900 + cloudFraction * 5200 + windSpeed * 70 + precipitation * 120, 500, 12000);
+    var cloudTopPressure = clamp(101325 * Math.pow(1 - (2.25577e-5 * cloudTopHeight), 5.2559), 18000, 100000);
+    var aerosolIndex = clamp(-1.2 + (windSpeed / 35) + ((100 - humidity) / 180) - precipitation * 0.04, -2, 5);
+    var seaLevelPressure = (Number.isFinite(w.surfacePressure) ? w.surfacePressure : 1010) + 14;
+    var waterVapour = clamp(4 + humidity * 0.28 + temperature * 0.18, 0, 70);
+    return {
+      s5p_cloud_fraction: round(cloudFraction, 4),
+      s5p_cloud_optical_thickness: round(opticalThickness, 3),
+      s5p_cloud_top_height_m: round(cloudTopHeight, 2),
+      s5p_cloud_top_pressure_pa: round(cloudTopPressure, 2),
+      s5p_aerosol_index: round(aerosolIndex, 4),
+      s3_humidity_pct: round(humidity, 2),
+      s3_sea_level_pressure_hpa: round(seaLevelPressure, 2),
+      s3_water_vapour_kg_m2: round(waterVapour, 2)
+    };
+  }
+
+  // Call the backend buildSample action: real Copernicus Sentinel-5P/3 stats + Open-Meteo weather
+  // for one city + date. Any satellite field a pass missed (even after window widening) is filled
+  // from deriveSatelliteInputs so the page still renders, and flagged in source_notes.
+  async function fetchRealSample(place, date) {
+    var apiBase = getConfig().apiBase;
+    if (!apiBase) throw new Error("No API base configured for sample fetch.");
+    var result = await postJson(apiBase, {
+      action: "buildSample",
+      place: place.name,
+      lat: place.lat,
+      lon: place.lon,
+      date: date || todayIso()
+    });
+    var sample = result && result.sample;
+    if (!sample || !Array.isArray(sample.feature_vector)) {
+      throw new Error("buildSample returned no sample.");
+    }
+
+    var missing = (sample.source_notes && sample.source_notes.missing_features) || [];
+    if (missing.length) {
+      var proxy = deriveSatelliteInputs({
+        cloudCover: sample.inputs.cloud_cover_mean,
+        humidity: sample.inputs.s3_humidity_pct,
+        precipitation: sample.inputs.precipitation_sum,
+        windSpeed: sample.inputs.wind_speed_10m_mean,
+        temperature: sample.observed_temperature_c,
+        surfacePressure: sample.inputs.surface_pressure_mean
+      });
+      missing.forEach(function (name) {
+        if (sample.inputs[name] === null || sample.inputs[name] === undefined) {
+          if (proxy[name] !== undefined) sample.inputs[name] = proxy[name];
+        }
+      });
+    }
+    // Recompute the vector after any fills and ensure no nulls leak into the model contract.
+    sample.country = place.country || sample.country || "";
+    sample.feature_vector = FEATURE_NAMES.map(function (name) {
+      var value = sample.inputs[name];
+      return Number.isFinite(Number(value)) ? Number(value) : 0;
+    });
+    sample.mode = "live";
+    return sample;
+  }
+
   async function fetchWeatherSample(place, date) {
+    try {
+      return await fetchRealSample(place, date);
+    } catch (realError) {
+      var preview = await fetchPreviewSample(place, date);
+      preview.source_notes = preview.source_notes || {};
+      preview.source_notes.fallback_reason = "Live satellite fetch failed: " + (realError.message || realError);
+      return preview;
+    }
+  }
+
+  async function fetchPreviewSample(place, date) {
     var selectedDate = date || todayIso();
     var hourly = [
       "temperature_2m",
@@ -493,6 +574,7 @@
     escapeHtml: escapeHtml,
     geocodePlace: geocodePlace,
     fetchWeatherSample: fetchWeatherSample,
+    fetchRealSample: fetchRealSample,
     fetchSentinelImage: fetchSentinelImage,
     fetchUploadUrl: fetchUploadUrl,
     uploadFile: uploadFile,

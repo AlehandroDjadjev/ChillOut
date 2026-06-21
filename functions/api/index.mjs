@@ -11,6 +11,7 @@ import { validateScenario, STATUSES } from './lib/schema.mjs';
 import { ensureSchema, createSimulationRow, getSimulationRow, listSimulationRows } from './lib/db.mjs';
 import { fetchSentinel2Png } from './lib/sentinel2.mjs';
 import { ensureInferenceSchema, createInferenceJob, getInferenceJob } from './lib/inference_db.mjs';
+import { buildSample } from './lib/build_sample.mjs';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -119,6 +120,18 @@ export const handler = async (event) => {
         return json(200, { image_data_url, mode: body.mode || 'cloud_mask', date: body.date });
       }
 
+      case 'buildSample': {
+        const sample = await buildSample({
+          place: body.place,
+          lat: body.lat,
+          lon: body.lon,
+          date: body.date,
+          bbox: body.bbox,
+          windowDays: body.windowDays,
+        });
+        return json(200, { sample });
+      }
+
       case 'getUploadUrl': {
         const { uploadUrl, key } = await getUploadUrl({
           jobUuid: body.jobUuid,
@@ -160,7 +173,7 @@ export const handler = async (event) => {
           error: 'Unknown action',
           available: ['hello', 'status', 'migrate', 'createSimulation', 'validateScenario',
             'getSimulation', 'getStatus', 'getResults', 'listSimulations', 'sentinel2',
-            'getUploadUrl', 'createInference', 'getInference'],
+            'buildSample', 'getUploadUrl', 'createInference', 'getInference'],
           statuses: STATUSES,
         });
     }
