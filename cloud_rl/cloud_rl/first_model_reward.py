@@ -346,6 +346,23 @@ def _load_v6_model_class():
     return module.ResidualTrendSplitConvLSTM
 
 
+def _load_v8_model_class():
+    root = Path(__file__).resolve().parents[2]
+    module_path = root / "NewModel" / "train_cloud_radiation_bottom_v8_CLEAN_DIRECT.py"
+    if not module_path.exists():
+        raise FileNotFoundError(
+            "Could not load CloudRadiationV8CleanDirect reward model because "
+            f"{module_path} does not exist."
+        )
+    spec = importlib.util.spec_from_file_location("cloud_radiation_v8_reward", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not import v8 reward model from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module.CloudRadiationV8CleanDirect
+
+
 class CloudTempCheckpointReward(AbstractRewardModel):
     """Reward model backed by a saved CloudTempModel checkpoint.
 
@@ -378,13 +395,19 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.world_feature_names = list(ckpt.get("world_feature_names", []))
         self.architecture = str(ckpt.get("architecture", "CloudTempDeepModel"))
         self.model_kind = (
-            "cloudforced_radiation_v6"
-            if "CloudForcedRadiationSplitConvLSTM_v6" in self.architecture or ckpt.get("target_is_delta")
-            else ("interaction" if self.cloud_feature_names and self.world_feature_names else "deep")
+            "radiation_v8"
+            if "CloudRadiationV8CleanDirect" in self.architecture
+            else (
+                "cloudforced_radiation_v6"
+                if "CloudForcedRadiationSplitConvLSTM_v6" in self.architecture or ckpt.get("target_is_delta")
+                else ("interaction" if self.cloud_feature_names and self.world_feature_names else "deep")
+            )
         )
+        self.reward_target_kind = "radiation_loss" if self.model_kind == "radiation_v8" else "temperature"
         self.image_height = int(ckpt["image_height"])
         self.image_width = int(ckpt["image_width"])
         self.lookback = int(ckpt.get("lookback", 1))
+        self.in_channels = int(ckpt.get("in_channels", 1))
 
         normalizer = ckpt["normalizer"]
         feature_mean = torch.tensor(normalizer["mean"], dtype=torch.float32)
@@ -392,6 +415,9 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         feature_std = torch.where(feature_std.abs() < 1e-6, torch.ones_like(feature_std), feature_std)
         self.register_buffer("feature_mean", feature_mean)
         self.register_buffer("feature_std", feature_std)
+        raw_index = {name: idx for idx, name in enumerate(self.raw_feature_names)}
+        cloud_idx = [raw_index[name] for name in self.cloud_feature_names if name in raw_index]
+        self.register_buffer("cloud_feature_indices", torch.tensor(cloud_idx, dtype=torch.long), persistent=False)
         target_norm = ckpt.get("target_normalizer") or {"mean": 0.0, "std": 1.0}
         self.target_mean_c = float(target_norm.get("mean", 0.0))
         self.target_std_c = float(target_norm.get("std", 1.0)) or 1.0
@@ -401,7 +427,10 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.context_scale = float((ckpt.get("args") or {}).get("context_scale", 0.15))
 
         state = _strip_compile_prefix(_strip_module_prefix(ckpt["model_state"]))
-        if self.model_kind == "cloudforced_radiation_v6":
+        if self.model_kind == "radiation_v8":
+            model_cls = _load_v8_model_class()
+            self.model = model_cls(**dict(ckpt.get("model_kwargs") or {}))
+        elif self.model_kind == "cloudforced_radiation_v6":
             model_cls = _load_v6_model_class()
             self.model = model_cls(**dict(ckpt.get("model_kwargs") or {}))
         elif self.model_kind == "interaction":
@@ -453,11 +482,11 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             processed = raw
         else:
             aligned = _align_by_names(raw, source_names, self.raw_feature_names)
-            processed = aligned if self.model_kind == "interaction" else _transform_raw_features(aligned, self.raw_feature_names)
+            processed = aligned if self.model_kind in {"interaction", "radiation_v8"} else _transform_raw_features(aligned, self.raw_feature_names)
         return self._normalize_processed_features(processed)
 
     def _prepare_aligned_features(self, aligned_features: torch.Tensor) -> torch.Tensor:
-        processed = aligned_features if self.model_kind == "interaction" else _transform_raw_features(aligned_features, self.raw_feature_names)
+        processed = aligned_features if self.model_kind in {"interaction", "radiation_v8"} else _transform_raw_features(aligned_features, self.raw_feature_names)
         return self._normalize_processed_features(processed)
 
     def _apply_action_to_cloud_features(
@@ -467,7 +496,7 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         generated_mask: torch.Tensor,
         property_maps: torch.Tensor,
     ) -> torch.Tensor:
-        if self.model_kind != "interaction":
+        if self.model_kind not in {"interaction", "radiation_v8"}:
             return aligned_raw_features
 
         index = {name: i for i, name in enumerate(self.raw_feature_names)}
@@ -573,6 +602,170 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         norm = self._prepare_aligned_features(aligned)
         return norm.view(b, t, -1)
 
+    def _select_cloud_features(self, normalized_features: torch.Tensor) -> torch.Tensor:
+        if self.cloud_feature_indices.numel() == 0:
+            raise ValueError("Radiation reward checkpoint has no cloud_feature_names.")
+        return normalized_features.index_select(-1, self.cloud_feature_indices.to(normalized_features.device))
+
+    def _fit_v8_image_channels(self, image_sequence: torch.Tensor) -> torch.Tensor:
+        b, t, c, h, w = image_sequence.shape
+        if (h, w) != (self.image_height, self.image_width):
+            image_sequence = F.interpolate(
+                image_sequence.reshape(b * t, c, h, w).float(),
+                size=(self.image_height, self.image_width),
+                mode="bilinear",
+                align_corners=False,
+            ).view(b, t, c, self.image_height, self.image_width)
+        if c < self.in_channels:
+            pad = image_sequence.new_zeros(b, t, self.in_channels - c, self.image_height, self.image_width)
+            image_sequence = torch.cat([image_sequence, pad], dim=2)
+        elif c > self.in_channels:
+            image_sequence = image_sequence[:, :, : self.in_channels]
+        return image_sequence.float().clamp(0.0, 1.0)
+
+    def _synthesize_v8_frame(self, mask: torch.Tensor, property_maps: torch.Tensor) -> torch.Tensor:
+        generated = self._prepare_mask(mask).float().clamp(0.0, 1.0)
+        props = property_maps.float()
+        if props.shape[-2:] != generated.shape[-2:]:
+            props = F.interpolate(props, size=generated.shape[-2:], mode="bilinear", align_corners=False)
+        props = props.clamp(0.0, 1.0)
+        prob = torch.maximum(generated, props[:, 0:1] if props.shape[1] > 0 else generated)
+        aot = props[:, 1:2] if props.shape[1] > 1 else generated.new_zeros(generated.shape)
+        layer = props[:, 2:3] if props.shape[1] > 2 else generated.new_zeros(generated.shape)
+        texture = props[:, 3:4] if props.shape[1] > 3 else generated.new_zeros(generated.shape)
+        cirrus = props[:, 4:5] if props.shape[1] > 4 else generated.new_zeros(generated.shape)
+        high = (layer > 0.66).float() * prob
+        medium = ((layer >= 0.33) & (layer <= 0.66)).float() * prob
+        channels = [generated, prob, torch.maximum(generated, prob), cirrus, high, medium, aot, texture]
+        frame = torch.cat(channels, dim=1)
+        if frame.shape[1] < self.in_channels:
+            frame = torch.cat([frame, frame.new_zeros(frame.shape[0], self.in_channels - frame.shape[1], *frame.shape[-2:])], dim=1)
+        return frame[:, : self.in_channels].clamp(0.0, 1.0)
+
+    def _derive_v8_cloud_features_from_image(
+        self,
+        image_sequence: torch.Tensor,
+        base_cloud_features: torch.Tensor,
+    ) -> torch.Tensor:
+        mean = self.feature_mean.index_select(0, self.cloud_feature_indices.to(self.feature_mean.device)).view(1, 1, -1).to(image_sequence.device)
+        std = self.feature_std.index_select(0, self.cloud_feature_indices.to(self.feature_std.device)).view(1, 1, -1).to(image_sequence.device).clamp_min(1e-6)
+        raw = base_cloud_features.float() * std + mean
+        name_to_i = {name: i for i, name in enumerate(self.cloud_feature_names)}
+        img = image_sequence.float().clamp(0.0, 1.0)
+        c = img.shape[2]
+        ch0 = img[:, :, 0]
+        ch1 = img[:, :, min(1, c - 1)]
+        ch3 = img[:, :, min(3, c - 1)]
+        ch4 = img[:, :, min(4, c - 1)]
+        ch5 = img[:, :, min(5, c - 1)]
+        ch6 = img[:, :, min(6, c - 1)]
+        ch7 = img[:, :, min(7, c - 1)]
+        flat_prob = ch1.flatten(2)
+        vals = {
+            "cloud_s2_fraction": ch0.mean(dim=(-1, -2)),
+            "cloud_s2_prob_mean": ch1.mean(dim=(-1, -2)),
+            "cloud_s2_prob_std": ch1.std(dim=(-1, -2)).clamp(0.0, 1.0),
+            "cloud_s2_prob_p90": torch.quantile(flat_prob, 0.90, dim=2).clamp(0.0, 1.0),
+            "cloud_s2_cirrus_fraction": ch3.mean(dim=(-1, -2)),
+            "cloud_s2_high_fraction": ch4.mean(dim=(-1, -2)),
+            "cloud_s2_medium_fraction": ch5.mean(dim=(-1, -2)),
+            "cloud_s2_aot_mean": ch6.mean(dim=(-1, -2)),
+            "cloud_s2_texture_std": ch7.std(dim=(-1, -2)).clamp(0.0, 1.0),
+            "cloud_s2_edge_density": (
+                (ch0[:, :, :, 1:] - ch0[:, :, :, :-1]).abs().mean(dim=(-1, -2))
+                + (ch0[:, :, 1:, :] - ch0[:, :, :-1, :]).abs().mean(dim=(-1, -2))
+            ).clamp(0.0, 1.0),
+        }
+        for name, value in vals.items():
+            pos = name_to_i.get(name)
+            if pos is not None:
+                raw[:, :, pos] = value.clamp(0.0, 1.0)
+        return (raw - mean) / std
+
+    def _normalize_v8_raw_sequence(self, raw_sequence: Optional[torch.Tensor], feature_vector: torch.Tensor, steps: int) -> torch.Tensor:
+        if raw_sequence is None:
+            raw_sequence = feature_vector[:, None, :].expand(-1, steps, -1)
+        b, t, f = raw_sequence.shape
+        flat = raw_sequence.reshape(b * t, f)
+        source_names = self._resolve_feature_names(f)
+        aligned = _align_by_names(flat.float(), source_names, self.raw_feature_names)
+        norm = self._prepare_aligned_features(aligned).view(b, t, -1)
+        return self._select_cloud_features(norm)
+
+    def _forward_radiation_v8(
+        self,
+        original_mask: torch.Tensor,
+        generated_mask: torch.Tensor,
+        feature_vector: torch.Tensor,
+        target_radiation_loss: torch.Tensor,
+        property_maps: torch.Tensor,
+        original_mask_sequence: Optional[torch.Tensor] = None,
+        cloud_tensor_sequence: Optional[torch.Tensor] = None,
+        raw_feature_sequence: Optional[torch.Tensor] = None,
+        radiation_context_features: Optional[torch.Tensor] = None,
+        radiation_clear_wm2: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        original = self._prepare_mask(original_mask)
+        generated = self._prepare_mask(generated_mask)
+        steps = max(1, self.lookback)
+        if cloud_tensor_sequence is not None:
+            original_seq = cloud_tensor_sequence.float()
+        elif original_mask_sequence is not None:
+            original_seq = original_mask_sequence.float()
+        else:
+            original_seq = original[:, None, :, :, :].expand(-1, steps, -1, -1, -1).contiguous()
+        original_seq = self._fit_v8_image_channels(original_seq)
+        generated_seq = original_seq.clone()
+        generated_seq[:, -1] = self._synthesize_v8_frame(generated, property_maps)
+
+        original_cloud = self._normalize_v8_raw_sequence(raw_feature_sequence, feature_vector, original_seq.shape[1])
+        generated_cloud = self._derive_v8_cloud_features_from_image(generated_seq, original_cloud)
+        if radiation_clear_wm2 is None:
+            radiation_clear_wm2 = torch.full((generated.shape[0], 1), 600.0, dtype=generated.dtype, device=generated.device)
+        clear = radiation_clear_wm2.float()
+        if radiation_context_features is None:
+            ctx = torch.zeros((generated.shape[0], 8), dtype=generated.dtype, device=generated.device)
+            ctx[:, 0:1] = clear / 1000.0
+            ctx[:, 1:2] = (clear >= 50.0).float()
+        else:
+            ctx = radiation_context_features.float()
+
+        with torch.inference_mode():
+            stacked_img = torch.cat([original_seq, generated_seq], dim=0)
+            stacked_cloud = torch.cat([original_cloud, generated_cloud], dim=0)
+            stacked_ctx = torch.cat([ctx, ctx], dim=0)
+            stacked_clear = torch.cat([clear, clear], dim=0)
+            if stacked_img.is_cuda:
+                with torch.autocast(device_type="cuda", enabled=True):
+                    pred = self.model(stacked_img, stacked_cloud, stacked_ctx, stacked_clear)["loss_wm2"]
+            else:
+                pred = self.model(stacked_img, stacked_cloud, stacked_ctx, stacked_clear)["loss_wm2"]
+
+        original_pred, generated_pred = pred.chunk(2, dim=0)
+        target = target_radiation_loss.float()
+        original_err = (original_pred - target).abs()
+        err = (generated_pred - target).abs()
+        improvement = original_err - err
+        reward_scale = max(self.reward_scale_c, 1.0)
+        reward = self.improvement_gain * (improvement / reward_scale)
+        if self.absolute_error_weight:
+            reward = reward - self.absolute_error_weight * (err / reward_scale)
+        if self.optional_budget_penalty > 0:
+            change_cost = (generated_mask - original_mask).abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
+            prop_cost = property_maps.abs().mean(dim=(1, 2, 3), keepdim=False)[:, None]
+            reward = reward - self.optional_budget_penalty * (change_cost + prop_cost)
+
+        return reward, {
+            "original_predicted_radiation_loss_wm2": original_pred.detach(),
+            "predicted_radiation_loss_wm2": generated_pred.detach(),
+            "target_radiation_loss_wm2": target.detach(),
+            "original_radiation_error_wm2": original_err.detach(),
+            "radiation_error_wm2": err.detach(),
+            "radiation_improvement_wm2": improvement.detach(),
+            "generated_cloud_fraction": generated_cloud[:, -1, self.cloud_feature_names.index("cloud_s2_fraction") : self.cloud_feature_names.index("cloud_s2_fraction") + 1].detach()
+            if "cloud_s2_fraction" in self.cloud_feature_names else torch.zeros_like(err).detach(),
+        }
+
     def _predict_temperature(
         self,
         mask: torch.Tensor,
@@ -621,10 +814,28 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         target_temperature: torch.Tensor,
         property_maps: torch.Tensor,
         original_mask_sequence: Optional[torch.Tensor] = None,
+        cloud_tensor_sequence: Optional[torch.Tensor] = None,
         raw_feature_sequence: Optional[torch.Tensor] = None,
         trend_features: Optional[torch.Tensor] = None,
         current_temperature: Optional[torch.Tensor] = None,
+        radiation_context_features: Optional[torch.Tensor] = None,
+        radiation_clear_wm2: Optional[torch.Tensor] = None,
+        current_radiation_loss_wm2: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        if self.model_kind == "radiation_v8":
+            return self._forward_radiation_v8(
+                original_mask,
+                generated_mask,
+                feature_vector,
+                target_temperature,
+                property_maps,
+                original_mask_sequence=original_mask_sequence,
+                cloud_tensor_sequence=cloud_tensor_sequence,
+                raw_feature_sequence=raw_feature_sequence,
+                radiation_context_features=radiation_context_features,
+                radiation_clear_wm2=radiation_clear_wm2,
+            )
+
         original = self._prepare_mask(original_mask)
         generated = self._prepare_mask(generated_mask)
         if original.ndim == 4 and original.is_cuda:

@@ -67,7 +67,7 @@
       el.originalCaption.textContent = "Sentinel-2 cloud mask - " + sample.date;
       renderFeatureTable();
       renderPayload();
-      setStatus("Mask ready for " + sample.sample_id + ". Upload a checkpoint and run.", "ok");
+      setStatus("Mask ready for " + sample.sample_id + ". Upload a checkpoint or run the AI fallback.", "ok");
     } catch (error) {
       setStatus("Could not build the mask: " + (error.message || String(error)), "error");
     } finally {
@@ -77,10 +77,6 @@
 
   async function runInference() {
     var checkpointFile = el.checkpoint.files && el.checkpoint.files[0];
-    if (!checkpointFile) {
-      setStatus("Select a checkpoint (.pt) file first.", "error");
-      return;
-    }
     var target = Number(el.target.value);
     if (!Number.isFinite(target)) {
       setStatus("Enter a valid target temperature.", "error");
@@ -98,13 +94,20 @@
         ? crypto.randomUUID()
         : "job-" + Date.now() + "-" + Math.random().toString(16).slice(2);
 
-      setStatus("Uploading checkpoint to storage...");
-      var ckptUp = await C.fetchUploadUrl(jobUuid, "checkpoint.pt", "application/octet-stream");
-      await C.uploadFile(ckptUp.uploadUrl, checkpointFile);
+      var checkpointKey = null;
+      if (checkpointFile) {
+        setStatus("Uploading checkpoint to storage...");
+        var ckptUp = await C.fetchUploadUrl(jobUuid, "checkpoint.pt", "application/octet-stream");
+        await C.uploadFile(ckptUp.uploadUrl, checkpointFile);
+        checkpointKey = ckptUp.key;
+      } else {
+        setStatus("No checkpoint uploaded. Running AI image fallback...");
+        el.modePill.textContent = "AI fallback";
+      }
 
       var statsKey = null;
       var statsFile = el.stats.files && el.stats.files[0];
-      if (statsFile) {
+      if (checkpointFile && statsFile) {
         setStatus("Uploading stats.json...");
         var statsUp = await C.fetchUploadUrl(jobUuid, "stats.json", "application/json");
         await C.uploadFile(statsUp.uploadUrl, statsFile);
@@ -114,7 +117,7 @@
       setStatus("Queueing inference job...");
       el.modePill.textContent = "queued";
       var created = await C.createInference({
-        checkpoint_key: ckptUp.key,
+        checkpoint_key: checkpointKey,
         stats_key: statsKey,
         mask_data_url: originalMaskDataUrl,
         raw_features: sample.feature_vector,
@@ -123,6 +126,12 @@
         date: sample.date
       });
       renderPayload(created);
+      if (created.status === "completed" && created.result) {
+        renderResult(created.result);
+        el.modePill.textContent = created.mode || "fallback";
+        setStatus("AI fallback image complete.", "ok");
+        return;
+      }
       await pollResult(created.id);
     } catch (error) {
       el.modePill.textContent = "error";
@@ -179,7 +188,7 @@
     }
     if (result.generated_mask_data_url) {
       el.generatedImage.src = result.generated_mask_data_url;
-      el.generatedCaption.textContent = "Generated mask";
+      el.generatedCaption.textContent = result.fallback ? "AI fallback overlay" : "Generated mask";
     }
     var maps = result.property_maps || {};
     el.propertyMaps.innerHTML = Object.keys(maps).map(function (name) {
@@ -188,10 +197,13 @@
     }).join("");
 
     var actions = result.actions || [];
+    var normalizationLabel = result.fallback
+      ? "OpenAI fallback"
+      : (result.normalization === "uploaded_stats" ? "uploaded" : "default");
     el.metrics.innerHTML = [
       metric(String(actions.length), "Actions emitted"),
       metric(Number.isFinite(Number(result.target_temperature_c)) ? Number(result.target_temperature_c).toFixed(1) + " C" : "-", "Target temperature"),
-      metric(result.normalization === "uploaded_stats" ? "uploaded" : "default", "Normalization")
+      metric(normalizationLabel, "Mode")
     ].join("");
     el.actions.textContent = JSON.stringify(actions, null, 2);
   }
@@ -217,7 +229,8 @@
       target_temperature_c: Number(el.target.value),
       raw_features: sample.feature_vector,
       mask_data_url: originalMaskDataUrl ? "[data-url omitted]" : null,
-      checkpoint_key: "media/inference/<uuid>/checkpoint.pt",
+      checkpoint_key: (el.checkpoint.files && el.checkpoint.files[0]) ? "media/inference/<uuid>/checkpoint.pt" : null,
+      fallback_without_checkpoint: !(el.checkpoint.files && el.checkpoint.files[0]),
       job: created ? { id: created.id, status: created.status } : null
     } : {};
     el.payload.textContent = JSON.stringify(payload, null, 2);

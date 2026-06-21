@@ -1,21 +1,23 @@
-data_root: dataset_out
+data_root: dataset_cloudforce_radiation_v6
 out_dir: ./runs/debug_rl
 image_height: 256
 image_width: 256
 batch_size: 4
 num_workers: 0
+lookback: 4
+max_gap_days: 12.0
 seed: 42
 
 policy:
   max_actions: 3
   hidden_dim: 256
-  lr: 0.0003
-  entropy_coef: 0.0
-  bc_coef: 0.05
+  lr: 0.0001
+  entropy_coef: 0.001
+  bc_coef: 0.0
   value_coef: 0.5
   clip_eps: 0.2
-  ppo_epochs: 4
-  grad_clip: 0.5
+  ppo_epochs: 1
+  grad_clip: 0.25
   guided_random_candidates: 4
 
 training:
@@ -30,5 +32,10 @@ normalization:
 
 target_augmentation:
   enabled: true
+  target_kind: auto
   min_abs_offset_c: 1.0
   max_abs_offset_c: 5.0
+  radiation_loss_scale_wm2: 300.0
+  radiation_jitter_wm2: 320.0
+  random_absolute_prob: 0.65
+  min_target_wm2: 0.0

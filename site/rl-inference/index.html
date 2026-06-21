@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ChillOut - RL Inference Runner</title>
-  <meta name="description" content="Upload an RL checkpoint and run it server-side on a live Sentinel-2 cloud mask: weights and inference execute in the backend, the generated mask and actions come back to the browser." />
+  <meta name="description" content="Run uploaded RL weights on a live Sentinel-2 cloud mask, or use the AI fallback overlay when no checkpoint is available." />
   <meta name="theme-color" content="#081317" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -34,13 +34,9 @@
   <main class="lab">
     <section class="lab__head reveal" data-reveal>
       <p class="kicker">Live model runner</p>
-      <h1 class="lab__title">Upload <em>real RL weights</em> and run them on a live cloud mask.</h1>
+      <h1 class="lab__title">Run <em>real RL weights</em> or use an AI fallback on a live cloud mask.</h1>
       <p class="lab__lead">
-        Pick a place and date, upload a trained checkpoint (<code>.pt</code>) and its
-        <code>stats.json</code>, then hit Run. The checkpoint is uploaded straight to storage, the
-        latest Sentinel-2 cloud mask is fetched for your area, and a backend worker loads the weights
-        and runs the policy on a VM (PyTorch can't run in the function itself). The generated mask,
-        action tokens, and property maps are returned here when the job finishes.
+        Pick a place and date, upload a trained checkpoint (<code>.pt</code>) and optionally its <code>stats.json</code>, then hit Run. The checkpoint is uploaded straight to storage, the latest Sentinel-2 cloud mask is fetched for your area, and a backend worker loads the weights and runs the policy on a VM. If no checkpoint is uploaded, the backend asks OpenAI to produce an intervention overlay from the mask and target temperature: red removes clouds, green adds clouds, and yellow modifies clouds.
       </p>
     </section>
 
@@ -50,7 +46,7 @@
           <div class="lab-card__head">
             <div>
               <h2>Inference input</h2>
-              <p>Choose the location, target, and the weights to run.</p>
+              <p>Choose the location and target. Weights are optional when using the AI fallback.</p>
             </div>
             <span class="lab-pill">checkpoint + data</span>
           </div>
@@ -69,10 +65,10 @@
             <label>Target temperature C
               <input id="targetInput" type="number" step="0.1" value="17.0" />
             </label>
-            <label class="lab-file">Checkpoint (.pt) — required
+            <label class="lab-file">Checkpoint (.pt) - optional; omit for AI fallback
               <input id="checkpointInput" type="file" accept=".pt,.pth,.ckpt,application/octet-stream" />
             </label>
-            <label class="lab-file">Normalization stats (stats.json) — recommended
+            <label class="lab-file">Normalization stats (stats.json) - recommended with checkpoint
               <input id="statsInput" type="file" accept=".json,application/json" />
             </label>
             <p id="status" class="lab-status" role="status"></p>
@@ -99,7 +95,7 @@
           <div class="lab-card__head">
             <div>
               <h2>Before / after cloud masks</h2>
-              <p>Original is the live Sentinel-2 mask; generated comes from your uploaded policy.</p>
+              <p>Original is the live Sentinel-2 mask; generated comes from the uploaded policy or AI fallback.</p>
             </div>
             <span id="modePill" class="lab-pill">waiting</span>
           </div>

@@ -33,5 +33,10 @@ normalization:
 
 target_augmentation:
   enabled: true
+  target_kind: auto
   min_abs_offset_c: 1.0
   max_abs_offset_c: 5.0
+  radiation_loss_scale_wm2: 300.0
+  radiation_jitter_wm2: 320.0
+  random_absolute_prob: 0.65
+  min_target_wm2: 0.0

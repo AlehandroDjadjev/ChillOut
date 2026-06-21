@@ -23,7 +23,7 @@ from cloud_rl.first_model_reward import CloudTempCheckpointReward, resolve_first
 from cloud_rl.models import CloudActorCritic
 from cloud_rl.ppo import RolloutBatch, ppo_update
 from cloud_rl.rewards import DummyMaxReward
-from cloud_rl.targeting import augment_target_temperature
+from cloud_rl.targeting import augment_target_goal
 from cloud_rl.utils import load_config, resolve_existing_path, save_json, seed_everything, to_device
 
 
@@ -64,9 +64,13 @@ def call_reward(reward_fn, batch: Dict[str, torch.Tensor], generated_mask: torch
         batch["target_temp"],
         property_maps,
         original_mask_sequence=batch.get("original_mask_sequence"),
+        cloud_tensor_sequence=batch.get("cloud_tensor_sequence"),
         raw_feature_sequence=batch.get("raw_feature_sequence"),
         trend_features=batch.get("trend_features"),
         current_temperature=batch.get("current_temp"),
+        radiation_context_features=batch.get("radiation_context_features"),
+        radiation_clear_wm2=batch.get("radiation_clear_wm2"),
+        current_radiation_loss_wm2=batch.get("current_radiation_loss_wm2"),
     )
 
 
@@ -101,6 +105,10 @@ def resolve_auto_reward_source(source: str) -> Path:
     if source not in {"", "auto"}:
         return resolve_existing_path(source)
     candidates = [
+        "runs/cloud_radiation_bottom_v8_clean_direct",
+        "runs/cloud_radiation_v8_clean_direct",
+        "runs/cloud_radiation_bottom_v8",
+        "NewModel/runs/cloud_radiation_bottom_v8_clean_direct",
         "runs/cloud_temp_cloudforced_radiation_v6",
         "runs/cloud_temp_interaction",
         "runs/cloud_temp_deep_480x300",
@@ -113,7 +121,8 @@ def resolve_auto_reward_source(source: str) -> Path:
             continue
     raise FileNotFoundError(
         "Could not find an automatic first-model reward run. "
-        "Expected one of runs/cloud_temp_cloudforced_radiation_v6, runs/cloud_temp_interaction, "
+        "Expected one of runs/cloud_radiation_bottom_v8_clean_direct, "
+        "runs/cloud_temp_cloudforced_radiation_v6, runs/cloud_temp_interaction, "
         "runs/cloud_temp_deep_480x300, or runs/cloud_temp."
     )
 
@@ -209,12 +218,15 @@ def collect_rollout(
         "original_temp_err": [],
         "temp_improvement": [],
         "target_temp": [],
+        "generated_radiation_err": [],
+        "original_radiation_err": [],
+        "radiation_improvement": [],
     }
     model.eval()
     with torch.inference_mode():
         for _ in range(steps):
             batch = to_device(next(loader_iter), device, non_blocking=(device.type == "cuda"))
-            batch = augment_target_temperature(batch, cfg, target_std=target_std, device=device)
+            batch = augment_target_goal(batch, cfg, target_std=target_std, device=device)
             if device.type == "cuda":
                 batch["obs_map"] = batch["obs_map"].contiguous(memory_format=torch.channels_last)
                 batch["original_mask"] = batch["original_mask"].contiguous(memory_format=torch.channels_last)
@@ -242,6 +254,14 @@ def collect_rollout(
                 if "temp_error_c" in reward_info:
                     debug_chunks["temp_improvement"].append(
                         (reward_info["original_temp_error_c"] - reward_info["temp_error_c"]).detach().cpu()
+                    )
+            if "radiation_error_wm2" in reward_info:
+                debug_chunks["generated_radiation_err"].append(reward_info["radiation_error_wm2"].detach().cpu())
+            if "original_radiation_error_wm2" in reward_info:
+                debug_chunks["original_radiation_err"].append(reward_info["original_radiation_error_wm2"].detach().cpu())
+                if "radiation_error_wm2" in reward_info:
+                    debug_chunks["radiation_improvement"].append(
+                        (reward_info["original_radiation_error_wm2"] - reward_info["radiation_error_wm2"]).detach().cpu()
                     )
             debug_chunks["reward"].append(reward.detach().cpu())
             debug_chunks["target_temp"].append(batch["target_temp"].detach().cpu())
@@ -277,6 +297,9 @@ def main() -> None:
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--resume", default="auto", help="Resume from policy_latest.pt, a checkpoint path, or none.")
     parser.add_argument("--write-stats", action="store_true", help="Compute data_root/stats.json before training.")
+    parser.add_argument("--updates", type=int, default=None, help="Override training.updates from the config.")
+    parser.add_argument("--steps-per-update", type=int, default=None, help="Override training.steps_per_update from the config.")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch_size from the config.")
     parser.add_argument(
         "--reward-checkpoint",
         default="auto",
@@ -296,6 +319,12 @@ def main() -> None:
         cfg["data_root"] = args.data_root
     if args.out_dir is not None:
         cfg["out_dir"] = args.out_dir
+    if args.batch_size is not None:
+        cfg["batch_size"] = args.batch_size
+    if args.updates is not None:
+        cfg.setdefault("training", {})["updates"] = args.updates
+    if args.steps_per_update is not None:
+        cfg.setdefault("training", {})["steps_per_update"] = args.steps_per_update
 
     seed_everything(int(cfg.get("seed", 42)))
     torch.set_num_threads(1)
@@ -373,6 +402,7 @@ def main() -> None:
         if device.type == "cuda":
             reward_fn = reward_fn.to(memory_format=torch.channels_last)
         print(f"Using first-model reward checkpoint: {reward_fn.checkpoint_path}")
+    cfg["reward_target_kind"] = getattr(reward_fn, "reward_target_kind", "temperature")
 
     resume_ckpt = resolve_rl_resume_checkpoint(args.resume, out_dir)
     start_update = 1

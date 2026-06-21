@@ -40,6 +40,12 @@ Optional values:
 - `COPERNICUS_IMAGE_WIDTH`: defaults to `768`.
 - `COPERNICUS_IMAGE_HEIGHT`: defaults to `480`.
 
+Backend RL runner fallback:
+
+- `OPENAI_API_KEY`: set this on the deployed backend/API function, not in browser JavaScript. It is used only when the RL inference runner is submitted without an uploaded `.pt` checkpoint.
+- `OPENAI_IMAGE_MODEL`: optional, defaults to `gpt-image-1`.
+- `OPENAI_IMAGE_SIZE`: optional, defaults to `1024x1024`.
+
 ## Security Note
 
 Keep `.env` private. The page no longer sends your client secret to the browser.
