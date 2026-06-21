@@ -16,11 +16,12 @@ Run:  bash worker/run_rl_worker.sh   (or DATABASE_URL=... python3 worker/rl_infe
 import base64
 import io
 import os
-import subprocess
 import sys
 import tempfile
 import time
 import traceback
+import urllib.error
+import urllib.request
 
 import numpy as np
 import torch
@@ -55,14 +56,16 @@ def log(msg):
 
 
 def storage_download(key, dest):
-    """Pull an object from OpenKBS storage with the CLI (reads openkbs.json at repo root)."""
-    subprocess.run(
-        ["openkbs", "storage", "download", key, dest],
-        cwd=REPO_ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    """Pull an uploaded object over HTTPS from the public CDN. Objects live under the `media/`
+    prefix and are served by CloudFront, so a plain GET works (the random job UUID in the key
+    keeps them unguessable). Uploaded by the Lambda's presigned PUT, fetched here."""
+    url = f"{config.STORAGE_CDN_BASE}/{key.lstrip('/')}"
+    with urllib.request.urlopen(url, timeout=120) as resp:
+        if resp.status != 200:
+            raise RuntimeError(f"download {key} failed: HTTP {resp.status}")
+        data = resp.read()
+    with open(dest, "wb") as fh:
+        fh.write(data)
 
 
 def decode_mask_data_url(data_url):
@@ -192,10 +195,9 @@ def main():
                 continue
             try:
                 process_job(job)
-            except subprocess.CalledProcessError as e:
-                detail = (e.stderr or e.stdout or str(e)).strip()
-                log(f"job {job['id']} failed (download): {detail}")
-                rl_db.mark_failed(job["id"], f"storage download failed: {detail[:500]}")
+            except urllib.error.URLError as e:
+                log(f"job {job['id']} failed (download): {e}")
+                rl_db.mark_failed(job["id"], f"checkpoint download failed: {str(e)[:500]}")
             except Exception as e:
                 log(f"job {job['id']} crashed: {e}\n{traceback.format_exc()}")
                 rl_db.mark_failed(job["id"], f"inference error: {e}")

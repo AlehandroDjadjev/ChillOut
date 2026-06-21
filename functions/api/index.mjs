@@ -11,6 +11,8 @@ import { validateScenario, STATUSES } from './lib/schema.mjs';
 import { ensureSchema, createSimulationRow, getSimulationRow, listSimulationRows } from './lib/db.mjs';
 import { fetchSentinel2Png } from './lib/sentinel2.mjs';
 import { ensureInferenceSchema, createInferenceJob, getInferenceJob } from './lib/inference_db.mjs';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 const headers = {
   'Content-Type': 'application/json',
@@ -22,24 +24,22 @@ const json = (statusCode, data) => ({ statusCode, headers, body: JSON.stringify(
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 
-// Presigned S3 upload via the Project API (no AWS SDK import needed). Objects land under the
-// CDN `media/` prefix so the worker can pull them with `openkbs storage download`.
+// Presigned S3 PUT URL (AWS SDK, the documented OpenKBS pattern). Objects land under the CDN
+// `media/` prefix so the worker can pull them later with `openkbs storage download`.
+const s3 = new S3Client({});
 async function getUploadUrl({ jobUuid, filename, contentType }) {
-  const projectId = process.env.OPENKBS_PROJECT_ID;
-  const apiKey = process.env.OPENKBS_API_KEY;
-  if (!projectId || !apiKey) throw new Error('Storage not configured on this function.');
+  const bucket = process.env.STORAGE_BUCKET;
+  if (!bucket) throw new Error('Storage not configured on this function.');
   if (!jobUuid || !SAFE_NAME.test(jobUuid)) throw new Error('Invalid jobUuid.');
   if (!filename || !SAFE_NAME.test(filename)) throw new Error('Invalid filename.');
   const key = `media/inference/${jobUuid}/${filename}`;
-  const res = await fetch(`https://project.openkbs.com/projects/${projectId}/storage/upload-url`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ key, contentType: contentType || 'application/octet-stream' }),
+  const command = new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ContentType: contentType || 'application/octet-stream',
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`upload-url failed (${res.status}): ${text.slice(0, 300)}`);
-  const data = JSON.parse(text);
-  return { uploadUrl: data.uploadUrl, key };
+  const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
+  return { uploadUrl, key };
 }
 
 export const handler = async (event) => {
