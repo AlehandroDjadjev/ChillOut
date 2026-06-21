@@ -6,6 +6,13 @@ import os
 # Job queue (same Postgres the Lambda writes to; DATABASE_URL injected by OpenKBS).
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+# CDN base for pulling uploaded RL checkpoints. Objects under the `media/` prefix are served
+# publicly through CloudFront, so the RL worker fetches checkpoints over HTTPS (the
+# `openkbs storage download` CLI path is unreliable on this runtime). Override per-deploy.
+STORAGE_CDN_BASE = os.environ.get(
+    "STORAGE_CDN_BASE", "https://d31rm64rx9q92u.cloudfront.net"
+).rstrip("/")
+
 # WRF/WPS install layout (defaults match infra/install_wrf.sh).
 WRF_ROOT = os.environ.get("WRF_ROOT", "/opt/wrf")
 WRF_DIR = os.environ.get("WRF_DIR", os.path.join(WRF_ROOT, "WRF"))

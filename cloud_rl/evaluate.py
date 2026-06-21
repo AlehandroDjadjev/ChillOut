@@ -18,6 +18,19 @@ from cloud_rl.targeting import augment_target_temperature
 from cloud_rl.utils import load_config, resolve_existing_path, to_device
 
 
+def reward_extra_kwargs(batch):
+    return {
+        "original_mask_sequence": batch.get("original_mask_sequence"),
+        "cloud_tensor_sequence": batch.get("cloud_tensor_sequence"),
+        "raw_feature_sequence": batch.get("raw_feature_sequence"),
+        "trend_features": batch.get("trend_features"),
+        "current_temperature": batch.get("current_temp"),
+        "radiation_context_features": batch.get("radiation_context_features"),
+        "radiation_clear_wm2": batch.get("radiation_clear_wm2"),
+        "current_radiation_loss_wm2": batch.get("current_radiation_loss_wm2"),
+    }
+
+
 def save_mask(t: torch.Tensor, path: Path) -> None:
     arr = t.detach().cpu().numpy()
     arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
@@ -78,6 +91,7 @@ def main() -> None:
         ).to(device)
     else:
         reward_fn = DummyMaxReward().to(device)
+    cfg["reward_target_kind"] = getattr(reward_fn, "reward_target_kind", "temperature")
 
     records = []
     with torch.no_grad():
@@ -97,10 +111,7 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 rast["property_maps"],
-                original_mask_sequence=batch.get("original_mask_sequence"),
-                raw_feature_sequence=batch.get("raw_feature_sequence"),
-                trend_features=batch.get("trend_features"),
-                current_temperature=batch.get("current_temp"),
+                **reward_extra_kwargs(batch),
             )
             sid = batch["sample_id"][0]
             save_mask(batch["original_mask"][0, 0], out_dir / f"{sid}_original.png")
@@ -113,10 +124,14 @@ def main() -> None:
             records.append({
                 "sample_id": sid,
                 "target_temperature_c": float(batch["target_temp"][0, 0].cpu()),
+                "target_radiation_loss_wm2": float(batch.get("target_radiation_loss_wm2", batch["target_temp"])[0, 0].cpu()),
                 "reward": float(reward[0, 0].cpu()),
                 "predicted_temperature_c": float(info.get("predicted_temperature_c", torch.zeros_like(reward))[0, 0].cpu()),
                 "temperature_error_c": float(info.get("temp_error_c", torch.zeros_like(reward))[0, 0].cpu()),
                 "temperature_improvement_c": float(info.get("temp_improvement_c", torch.zeros_like(reward))[0, 0].cpu()),
+                "predicted_radiation_loss_wm2": float(info.get("predicted_radiation_loss_wm2", torch.zeros_like(reward))[0, 0].cpu()),
+                "radiation_error_wm2": float(info.get("radiation_error_wm2", torch.zeros_like(reward))[0, 0].cpu()),
+                "radiation_improvement_wm2": float(info.get("radiation_improvement_wm2", torch.zeros_like(reward))[0, 0].cpu()),
                 "actions": actions_to_jsonable(sampled["op"][0].cpu(), sampled["params"][0].cpu()),
                 "outputs": {
                     "original_mask": f"{sid}_original.png",

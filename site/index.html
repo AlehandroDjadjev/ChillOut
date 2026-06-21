@@ -17,8 +17,9 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23081317'/%3E%3Cpath d='M10 18a5 5 0 0 1 .6-9.96A6 6 0 0 1 22 9.5a4.5 4.5 0 0 1-.5 8.98z' fill='none' stroke='%23f5c542' stroke-width='1.6'/%3E%3Cpath d='M12 22l-1 3M16 22l-1 3M20 22l-1 3' stroke='%23f5c542' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E" />
 
   <!-- bump ?v= whenever the referenced css/js changes (assets are cached immutable for 1y) -->
-  <link rel="stylesheet" href="css/styles.css?v=11" />
-  <link rel="stylesheet" href="css/animations.css?v=11" />
+  <link rel="stylesheet" href="css/styles.css?v=12" />
+  <link rel="stylesheet" href="css/animations.css?v=12" />
+  <link rel="stylesheet" href="model-lab/model-lab.css?v=12" />
 </head>
 <body>
   <!-- grain / atmosphere overlay -->
@@ -36,10 +37,11 @@
       </a>
       <nav class="nav__links" aria-label="Primary">
         <a href="#problem">Problem</a>
+        <a href="#models">Models</a>
         <a href="#use-cases">Use cases</a>
         <a href="#vision">Vision</a>
       </nav>
-      <a href="simulation/" class="btn btn--primary nav__cta">Launch Simulator</a>
+      <a href="simulation/index.html" class="btn btn--primary nav__cta">Launch Simulator</a>
     </div>
   </header>
 
@@ -58,11 +60,11 @@
           rain, snow, and storm relief across a region.
         </p>
         <div class="hero__actions reveal" data-reveal data-delay="3">
-          <a href="simulation/" class="btn btn--primary">
+          <a href="simulation/index.html" class="btn btn--primary">
             Try the Simulator
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </a>
-          <a href="#problem" class="btn btn--ghost">Learn More</a>
+          <a href="#models" class="btn btn--ghost">View Models</a>
         </div>
         <dl class="hero__stats reveal" data-reveal data-delay="4">
           <div><dt>Rain</dt><dd>enhancement</dd></div>
@@ -137,10 +139,34 @@
       </div>
     </section>
 
+    <!-- MODELS -->
+    <section class="section models" id="models">
+      <div class="section__head">
+        <p class="kicker reveal" data-reveal>02 - Model demos</p>
+        <h2 class="section__title reveal" data-reveal>Show the trained-model<br /><em>interfaces</em>.</h2>
+        <p class="section__lead reveal" data-reveal data-delay="1">
+          These pages are frontend-ready showcases for the two model flows. They fetch or accept
+          model-shaped inputs today, then expose a small endpoint boundary for real hosted inference later.
+        </p>
+      </div>
+      <div class="model-links">
+        <a class="model-link glass reveal" data-reveal href="model-temperature/index.html">
+          <span class="lab-pill">model 01</span>
+          <h3>Temperature Predictor</h3>
+          <p>Select a place and day, fetch weather/cloud features in the training format, and preview the temperature-model output.</p>
+        </a>
+        <a class="model-link glass reveal" data-reveal data-delay="1" href="rl-inference/index.html">
+          <span class="lab-pill">model 02</span>
+          <h3>RL Inference Runner</h3>
+          <p>Upload trained RL weights and a stats file, fetch a live Sentinel-2 cloud mask, and run the real policy on a backend worker to get the generated mask and action data.</p>
+        </a>
+      </div>
+    </section>
+
     <!-- USE CASES -->
     <section class="section use-cases" id="use-cases">
       <div class="section__head">
-        <p class="kicker reveal" data-reveal>04 — Where it matters</p>
+        <p class="kicker reveal" data-reveal>03 - Where it matters</p>
         <h2 class="section__title reveal" data-reveal>Put precipitation<br />where it counts.</h2>
       </div>
       <div class="cases">
@@ -171,7 +197,7 @@
     <!-- VISION -->
     <section class="section vision" id="vision">
       <div class="vision__inner glass reveal" data-reveal>
-        <p class="kicker reveal" data-reveal>05 — The horizon</p>
+        <p class="kicker reveal" data-reveal>04 - The horizon</p>
         <h2 class="vision__title reveal" data-reveal data-delay="1">
           A future of weather<br /><em>we can work with.</em>
         </h2>
@@ -201,6 +227,7 @@
       </div>
       <nav class="footer__links" aria-label="Footer">
         <a href="#problem">Problem</a>
+        <a href="#models">Models</a>
         <a href="#use-cases">Use cases</a>
         <a href="#vision">Vision</a>
       </nav>
@@ -211,7 +238,7 @@
     </div>
   </footer>
 
-  <script src="js/clouds.js?v=11" defer></script>
-  <script src="js/reveal.js?v=11" defer></script>
+  <script src="js/clouds.js?v=12" defer></script>
+  <script src="js/reveal.js?v=12" defer></script>
 </body>
 </html>

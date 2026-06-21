@@ -274,14 +274,97 @@ eval_outputs/
   <sample_id>_height_norm.png
 ```
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+
+## Local RL debug training
+
+From the repo root, run a tiny local smoke test with the dummy reward first:
+
+```bash
+python cloud_rl/train_local_debug.py \
+  --data-root dataset_cloudforce_radiation_v6 \
+  --reward-checkpoint none \
+  --updates 3 \
+  --steps-per-update 1 \
+  --batch-size 2 \
+  --eval-samples 6 \
+  --out-dir runs/local_rl_debug
+```
+
+Then run the same short loop against the v6 reward model checkpoint:
+
+```bash
+python cloud_rl/train_local_debug.py \
+  --data-root dataset_cloudforce_radiation_v6 \
+  --reward-checkpoint runs/cloud_temp_cloudforced_radiation_v6/best.pt \
+  --updates 3 \
+  --steps-per-update 1 \
+  --batch-size 2 \
+  --eval-samples 6 \
+  --out-dir runs/local_rl_debug_v6
+```
+
+Use `--device cpu` if the local machine has no CUDA. The run writes:
+
+```text
+runs/local_rl_debug*/
+  policy_latest.pt
+  history.local_debug.json
+  rl_io_debug.json
+  examples/*_input_mask.png
+  examples/*_generated_mask.png
+  examples/*_cloud_probability.png
+  examples/*_aot_norm.png
+  examples/*_cloud_layer.png
+  examples/*_texture_norm.png
+  examples/*_cirrus_proxy.png
+```
+
+`rl_io_debug.json` records the actual tensors passed into the policy, the sampled actions, generated mask stats, reward value, and reward-model debug fields for each exported example.
+
+## V8 radiation reward training
+
+The current radiation path uses `CloudRadiationV8CleanDirect` as the reward
+model. The RL scalar goal becomes a random target cloud-loss value in W/m2 each
+rollout, normalized into the existing goal channel.
+
+Set Sentinel Hub credentials first:
+
+```powershell
+$env:SH_CLIENT_ID="..."
+$env:SH_CLIENT_SECRET="..."
+```
+
+Then run the full local pipeline:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/train_v8_then_rl_local.ps1
+```
+
+Useful shorter smoke run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/train_v8_then_rl_local.ps1 `
+  -MaxScenesPerLocation 20 `
+  -V8Epochs 3 `
+  -RlUpdates 20 `
+  -RlBatchSize 4
+```
+
+If the dataset already exists:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/train_v8_then_rl_local.ps1 `
+  -SkipDataset `
+  -DataRoot dataset_cloudforce_radiation_v6
+```
+
+The important outputs are:
+
+```text
+runs/cloud_radiation_bottom_v8_clean_direct/best.pt
+runs/cloud_rl_v8_radiation/policy_latest.pt
+```
+
 ## Diagnose RL behavior
 
 Run the deeper diagnostic pass against a real policy and the first-model reward:
@@ -306,13 +389,6 @@ This prints and saves:
 
 The output file is `./rl_diagnostics/rl_diagnostics.json`.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> a9ab4c8aa146ced4d7e82627c2b155b681f8f9fa
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 ## How to plug in the future ConvLSTM reward model
 
 The reward interface is already fixed as:
