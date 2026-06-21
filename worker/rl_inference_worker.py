@@ -63,7 +63,12 @@ def storage_download(key, dest):
     with urllib.request.urlopen(url, timeout=120) as resp:
         if resp.status != 200:
             raise RuntimeError(f"download {key} failed: HTTP {resp.status}")
+        ctype = (resp.headers.get("Content-Type") or "").lower()
         data = resp.read()
+    # CloudFront serves an HTML catch-all (200) for keys that don't exist, which would later
+    # blow up torch.load with a cryptic pickle error. Fail honestly instead.
+    if "text/html" in ctype:
+        raise RuntimeError(f"object not found at {key} (CDN returned an HTML page)")
     with open(dest, "wb") as fh:
         fh.write(data)
 
@@ -121,8 +126,11 @@ def process_job(job):
             stats_path = os.path.join(tmp, "stats.json")
             storage_download(job["stats_key"], stats_path)
 
-        # 2. Load checkpoint + its training config.
-        ckpt = torch.load(ckpt_path, map_location="cpu")
+        # 2. Load checkpoint + its training config. weights_only=False because real training
+        # checkpoints carry a cfg dict / numpy scalars / argparse Namespaces that the torch>=2.6
+        # safe-unpickler rejects; the user uploaded these weights, so we trust them (same
+        # semantics as cloud_rl/evaluate.py's plain torch.load).
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         cfg = ckpt.get("cfg") or {}
         lookback = int(cfg.get("lookback", 4))
         policy_cfg = cfg.get("policy", {})
