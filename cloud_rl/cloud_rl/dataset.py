@@ -278,6 +278,50 @@ def compute_stats(
     }
 
 
+def assemble_obs_map(
+    mask: torch.Tensor,
+    policy_features: np.ndarray,
+    target_norm_scalar: float,
+    image_size: Tuple[int, int],
+) -> torch.Tensor:
+    """Stack the observation map exactly as the policy was trained on:
+    channel 0 = binary mask, channels 1..F = the policy feature vector broadcast over the
+    image, last channel = the normalized target temperature plane. Shared by the dataset
+    and the single-image inference worker so the 1+F+1 layout can never drift between them."""
+    h, w = image_size
+    feature_planes = torch.from_numpy(policy_features).float()[:, None, None].expand(-1, h, w)
+    target_plane = torch.full((1, h, w), float(target_norm_scalar), dtype=torch.float32)
+    return torch.cat([mask, feature_planes, target_plane], dim=0)
+
+
+def build_single_policy_features(
+    raw_features: np.ndarray,
+    feature_mean: np.ndarray,
+    feature_std: np.ndarray,
+    target_mean: float,
+    target_std: float,
+    target_c: float,
+    lookback: int,
+    current_c: Optional[float] = None,
+    offset_days: float = 5.0,
+) -> Tuple[np.ndarray, float]:
+    """Build (policy_features, target_norm) for a SINGLE observation (no real history).
+
+    Mirrors CloudFolderDataset.__getitem__: a one-frame window means the trend block is all
+    zeros (repeating one frame yields zero deltas). Returns the concatenated policy feature
+    vector [len(features) + lookback*4 + 2] and the scalar normalized target temperature."""
+    norm_features = (np.asarray(raw_features, dtype=np.float32) - feature_mean) / feature_std
+    trend = np.zeros((lookback, 4), dtype=np.float32)
+    current = float(current_c) if current_c is not None else float(target_c)
+    current_norm = np.asarray([(current - target_mean) / target_std], dtype=np.float32)
+    target_norm = np.asarray([(float(target_c) - target_mean) / target_std], dtype=np.float32)
+    offset_norm = np.asarray([offset_days / 10.0], dtype=np.float32)
+    policy_features = np.concatenate(
+        [norm_features, trend.reshape(-1), current_norm, offset_norm]
+    ).astype(np.float32)
+    return policy_features, float(target_norm[0])
+
+
 class CloudFolderDataset(Dataset):
     """Loads the exporter output manifest and its mask PNGs.
 
@@ -384,12 +428,9 @@ class CloudFolderDataset(Dataset):
         offset_norm = np.asarray([target_offset_days(sample) / 10.0], dtype=np.float32)
         policy_features = np.concatenate([norm_features, trend.reshape(-1), current_norm, offset_norm]).astype(np.float32)
 
-        h, w = self.image_size
         mask_sequence = torch.stack(masks, dim=0).float()
         mask = mask_sequence[-1]
-        feature_planes = torch.from_numpy(policy_features).float()[:, None, None].expand(-1, h, w)
-        target_plane = torch.full((1, h, w), float(target_norm[0]), dtype=torch.float32)
-        obs_map = torch.cat([mask, feature_planes, target_plane], dim=0)
+        obs_map = assemble_obs_map(mask, policy_features, float(target_norm[0]), self.image_size)
 
         return {
             "obs_map": obs_map.float(),

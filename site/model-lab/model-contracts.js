@@ -284,6 +284,40 @@
     return result.image_data_url;
   }
 
+  async function fetchUploadUrl(jobUuid, filename, contentType) {
+    var apiBase = getConfig().apiBase;
+    if (!apiBase) throw new Error("No API base configured for upload.");
+    var result = await postJson(apiBase, {
+      action: "getUploadUrl",
+      jobUuid: jobUuid,
+      filename: filename,
+      contentType: contentType || "application/octet-stream"
+    });
+    if (!result || !result.uploadUrl) throw new Error("Upload URL request returned nothing.");
+    return result;
+  }
+
+  async function uploadFile(uploadUrl, file) {
+    var response = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file
+    });
+    if (!response.ok) throw new Error("File upload to storage failed (" + response.status + ").");
+  }
+
+  async function createInference(payload) {
+    var apiBase = getConfig().apiBase;
+    if (!apiBase) throw new Error("No API base configured for inference.");
+    return postJson(apiBase, Object.assign({ action: "createInference" }, payload));
+  }
+
+  async function getInference(id) {
+    var apiBase = getConfig().apiBase;
+    if (!apiBase) throw new Error("No API base configured for inference.");
+    return postJson(apiBase, { action: "getInference", id: id });
+  }
+
   async function postJson(url, body) {
     var response = await fetch(url, {
       method: "POST",
@@ -460,6 +494,10 @@
     geocodePlace: geocodePlace,
     fetchWeatherSample: fetchWeatherSample,
     fetchSentinelImage: fetchSentinelImage,
+    fetchUploadUrl: fetchUploadUrl,
+    uploadFile: uploadFile,
+    createInference: createInference,
+    getInference: getInference,
     drawMask: drawMask,
     runTemperatureModel: runTemperatureModel,
     runPlannerModel: runPlannerModel,

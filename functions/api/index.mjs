@@ -10,6 +10,7 @@
 import { validateScenario, STATUSES } from './lib/schema.mjs';
 import { ensureSchema, createSimulationRow, getSimulationRow, listSimulationRows } from './lib/db.mjs';
 import { fetchSentinel2Png } from './lib/sentinel2.mjs';
+import { ensureInferenceSchema, createInferenceJob, getInferenceJob } from './lib/inference_db.mjs';
 
 const headers = {
   'Content-Type': 'application/json',
@@ -18,6 +19,28 @@ const headers = {
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 const json = (statusCode, data) => ({ statusCode, headers, body: JSON.stringify(data) });
+
+const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+
+// Presigned S3 upload via the Project API (no AWS SDK import needed). Objects land under the
+// CDN `media/` prefix so the worker can pull them with `openkbs storage download`.
+async function getUploadUrl({ jobUuid, filename, contentType }) {
+  const projectId = process.env.OPENKBS_PROJECT_ID;
+  const apiKey = process.env.OPENKBS_API_KEY;
+  if (!projectId || !apiKey) throw new Error('Storage not configured on this function.');
+  if (!jobUuid || !SAFE_NAME.test(jobUuid)) throw new Error('Invalid jobUuid.');
+  if (!filename || !SAFE_NAME.test(filename)) throw new Error('Invalid filename.');
+  const key = `media/inference/${jobUuid}/${filename}`;
+  const res = await fetch(`https://project.openkbs.com/projects/${projectId}/storage/upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ key, contentType: contentType || 'application/octet-stream' }),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`upload-url failed (${res.status}): ${text.slice(0, 300)}`);
+  const data = JSON.parse(text);
+  return { uploadUrl: data.uploadUrl, key };
+}
 
 export const handler = async (event) => {
   if (event.requestContext?.http?.method === 'OPTIONS') {
@@ -96,11 +119,48 @@ export const handler = async (event) => {
         return json(200, { image_data_url, mode: body.mode || 'cloud_mask', date: body.date });
       }
 
+      case 'getUploadUrl': {
+        const { uploadUrl, key } = await getUploadUrl({
+          jobUuid: body.jobUuid,
+          filename: body.filename,
+          contentType: body.contentType,
+        });
+        return json(200, { uploadUrl, key });
+      }
+
+      case 'createInference': {
+        if (!body.checkpoint_key) return json(400, { error: 'checkpoint_key required' });
+        if (!body.mask_data_url) return json(400, { error: 'mask_data_url required' });
+        if (!Array.isArray(body.raw_features) || body.raw_features.length !== 14) {
+          return json(400, { error: 'raw_features must be a 14-number array' });
+        }
+        await ensureInferenceSchema();
+        const row = await createInferenceJob({
+          checkpoint_key: body.checkpoint_key,
+          stats_key: body.stats_key,
+          mask_data_url: body.mask_data_url,
+          raw_features: body.raw_features,
+          target_temp: body.target_temperature_c,
+          place: body.place,
+          date: body.date,
+        });
+        return json(201, { id: row.id, status: row.status, created_at: row.created_at });
+      }
+
+      case 'getInference': {
+        if (!body.id) return json(400, { error: 'id required' });
+        await ensureInferenceSchema();
+        const row = await getInferenceJob(body.id);
+        if (!row) return json(404, { error: 'inference job not found' });
+        return json(200, { id: row.id, status: row.status, result: row.result, error: row.error });
+      }
+
       default:
         return json(400, {
           error: 'Unknown action',
           available: ['hello', 'status', 'migrate', 'createSimulation', 'validateScenario',
-            'getSimulation', 'getStatus', 'getResults', 'listSimulations', 'sentinel2'],
+            'getSimulation', 'getStatus', 'getResults', 'listSimulations', 'sentinel2',
+            'getUploadUrl', 'createInference', 'getInference'],
           statuses: STATUSES,
         });
     }
