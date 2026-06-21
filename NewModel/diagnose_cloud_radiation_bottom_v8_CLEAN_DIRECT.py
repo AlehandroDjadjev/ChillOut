@@ -11,9 +11,9 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from train_cloud_radiation_bottom_v7 import (
-    base, CloudRadiationV7, RadiationSequenceDataset, strip_prefix,
-    metric
+from train_cloud_radiation_bottom_v8_CLEAN_DIRECT import (
+    base, CloudRadiationV8CleanDirect, RadiationSequenceDataset, strip_prefix,
+    metric, clean_radiation_records
 )
 
 
@@ -137,6 +137,23 @@ def main():
     x_norm = base.Normalizer.from_state_dict(ckpt["normalizer"])
     records = base.load_records(root, args.split)
 
+    class _Args:
+        pass
+    _a = _Args()
+    ckargs = ckpt.get("args", {})
+    _a.min_clear_wm2 = float(ckargs.get("min_clear_wm2", 120.0))
+    _a.clean_drop_invalid = bool(ckargs.get("clean_drop_invalid", True))
+    _a.clean_drop_negative = bool(ckargs.get("clean_drop_negative", True))
+    _a.clean_drop_high_cloud_low_loss = bool(ckargs.get("clean_drop_high_cloud_low_loss", True))
+    _a.clean_drop_low_cloud_high_loss = bool(ckargs.get("clean_drop_low_cloud_high_loss", False))
+    _a.high_cloud_thresh = float(ckargs.get("high_cloud_thresh", 0.65))
+    _a.low_cloud_thresh = float(ckargs.get("low_cloud_thresh", 0.05))
+    _a.low_loss_thresh_wm2 = float(ckargs.get("low_loss_thresh_wm2", 25.0))
+    _a.high_loss_thresh_wm2 = float(ckargs.get("high_loss_thresh_wm2", 280.0))
+    _a.min_loss_wm2 = float(ckargs.get("min_loss_wm2", 0.0))
+    _a.max_loss_wm2 = float(ckargs.get("max_loss_wm2", 900.0))
+    records = clean_radiation_records(records, _a, args.split)
+
     ds = RadiationSequenceDataset(
         root=root,
         records=records,
@@ -149,10 +166,11 @@ def main():
         max_gap_days=float(ckpt.get("args", {}).get("max_gap_days", 12.0)),
         use_cloud_tensor=bool(ckpt.get("args", {}).get("use_cloud_tensor", False)),
         augment=False,
+        min_clear_wm2=float(ckpt.get("args", {}).get("min_clear_wm2", 120.0)),
     )
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = CloudRadiationV7(**ckpt["model_kwargs"]).to(device)
+    model = CloudRadiationV8CleanDirect(**ckpt["model_kwargs"]).to(device)
     model.load_state_dict(strip_prefix(ckpt["model_state"]))
     model.eval()
 
@@ -160,7 +178,7 @@ def main():
     rows, pred_rows = evaluate_variants(model, loader, device, variants)
     write_csv(out_dir / "radiation_v7_metrics_by_variant.csv", rows)
     write_csv(out_dir / "radiation_v7_predictions.csv", pred_rows)
-    summary = {"architecture": ckpt.get("architecture", "CloudRadiationV7"), "split": args.split, "n_windows": len(ds), "metrics": rows}
+    summary = {"architecture": ckpt.get("architecture", "CloudRadiationV8CleanDirect"), "split": args.split, "n_windows": len(ds), "metrics": rows}
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     print("DONE")

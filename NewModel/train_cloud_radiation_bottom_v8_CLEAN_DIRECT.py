@@ -125,6 +125,65 @@ def train_radiation_stats(records: List[Dict[str, Any]]) -> Dict[str, float]:
     }
 
 
+def cloud_fraction_from_record(record: Dict[str, Any]) -> float:
+    inputs = record.get("inputs") or {}
+    if "cloud_s2_fraction" in inputs:
+        return float(inputs.get("cloud_s2_fraction", 0.0))
+    return 0.0
+
+
+def clean_radiation_records(records: List[Dict[str, Any]], args, split_name: str) -> List[Dict[str, Any]]:
+    """Drop obvious label contradictions before training/eval.
+
+    These are not model errors; they are target construction/pathology cases:
+    - observed shortwave greater than clear-sky proxy
+    - negative cloud loss / attenuation
+    - very cloudy Sentinel scene but almost no estimated radiation loss
+    - very low clear-sky scenes where W/m2 target is weak/noisy
+    """
+    out = []
+    counts = {
+        "input": len(records),
+        "drop_invalid": 0,
+        "drop_low_clear": 0,
+        "drop_negative_or_obs_gt_clear": 0,
+        "drop_high_cloud_low_loss": 0,
+        "drop_low_cloud_high_loss": 0,
+        "drop_loss_outside_range": 0,
+    }
+    for r in records:
+        rb = base.radiation_bundle(r)
+        loss = float(rb["loss_wm2"])
+        clear = float(rb["clear_wm2"])
+        obs = float(rb["observed_wm2"])
+        valid = float(rb["valid"])
+        cf = cloud_fraction_from_record(r)
+
+        if args.clean_drop_invalid and valid < 0.5:
+            counts["drop_invalid"] += 1
+            continue
+        if clear < args.min_clear_wm2:
+            counts["drop_low_clear"] += 1
+            continue
+        if args.clean_drop_negative and (loss < 0.0 or obs > clear):
+            counts["drop_negative_or_obs_gt_clear"] += 1
+            continue
+        if args.clean_drop_high_cloud_low_loss and cf >= args.high_cloud_thresh and loss <= args.low_loss_thresh_wm2:
+            counts["drop_high_cloud_low_loss"] += 1
+            continue
+        if args.clean_drop_low_cloud_high_loss and cf <= args.low_cloud_thresh and loss >= args.high_loss_thresh_wm2:
+            counts["drop_low_cloud_high_loss"] += 1
+            continue
+        if loss < args.min_loss_wm2 or loss > args.max_loss_wm2:
+            counts["drop_loss_outside_range"] += 1
+            continue
+        out.append(r)
+
+    counts["kept"] = len(out)
+    print(f"[clean {split_name}] " + " ".join(f"{k}={v}" for k, v in counts.items()))
+    return out
+
+
 def load_cloud_tensor_or_mask(root: Path, record: Dict[str, Any], h: int, w: int, use_cloud_tensor: bool) -> np.ndarray:
     """Return [C,H,W]. Prefer the original Sentinel tensor if present."""
     if use_cloud_tensor and record.get("cloud_tensor_path"):
@@ -151,7 +210,8 @@ def load_cloud_tensor_or_mask(root: Path, record: Dict[str, Any], h: int, w: int
 class RadiationSequenceDataset(Dataset):
     def __init__(self, root: Path, records: List[Dict[str, Any]], raw_names: List[str],
                  cloud_names: List[str], x_norm, image_height: int, image_width: int,
-                 lookback: int, max_gap_days: float, use_cloud_tensor: bool, augment: bool):
+                 lookback: int, max_gap_days: float, use_cloud_tensor: bool, augment: bool,
+                 min_clear_wm2: float = 120.0):
         self.root = root
         self.raw_names = raw_names
         self.cloud_names = cloud_names
@@ -160,6 +220,7 @@ class RadiationSequenceDataset(Dataset):
         self.image_width = image_width
         self.use_cloud_tensor = use_cloud_tensor
         self.augment = augment
+        self.min_clear_wm2 = float(min_clear_wm2)
         raw_to_idx = {n: i for i, n in enumerate(raw_names)}
         self.cloud_idx = [raw_to_idx[n] for n in cloud_names]
         self.windows = base.build_windows(records, lookback, max_gap_days)
@@ -185,6 +246,8 @@ class RadiationSequenceDataset(Dataset):
         clear = float(rb["clear_wm2"])
         loss = float(rb["loss_wm2"])
         valid = float(rb["valid"])
+        if clear < self.min_clear_wm2:
+            valid = 0.0
         attn = float(rb["attenuation"])
         # Robust bounded targets.
         attn = float(max(0.0, min(1.2, attn)))
@@ -297,7 +360,7 @@ class MLP(nn.Module):
         return self.net(x)
 
 
-class CloudRadiationV7(nn.Module):
+class CloudRadiationV8CleanDirect(nn.Module):
     """Radiation-only bottom model.
 
     Design:
@@ -312,10 +375,15 @@ class CloudRadiationV7(nn.Module):
     def __init__(self, in_channels: int, num_cloud_features: int, stem_dim: int = 64,
                  convlstm_dims: Optional[List[int]] = None, cloud_dim: int = 128,
                  context_dim: int = 64, fusion_dim: int = 192, dropout: float = 0.12,
-                 loss_scale: float = 300.0, init_attn_prior: float = 0.20):
+                 loss_scale: float = 300.0, init_attn_prior: float = 0.20,
+                 residual_factor: float = 0.05, init_loss_prior_wm2: float = 140.0,
+                 max_direct_loss_wm2: float = 900.0, final_blend_direct: float = 1.0):
         super().__init__()
         convlstm_dims = convlstm_dims or [64, 96]
         self.loss_scale = float(loss_scale)
+        self.residual_factor = float(residual_factor)
+        self.max_direct_loss_wm2 = float(max_direct_loss_wm2)
+        self.final_blend_direct = float(final_blend_direct)
         self.stem = nn.Sequential(
             Down(in_channels, 32, dropout * 0.25),
             Down(32, 48, dropout * 0.25),
@@ -339,6 +407,10 @@ class CloudRadiationV7(nn.Module):
             nn.Linear(fusion_dim, 96), nn.LayerNorm(96), nn.SiLU(inplace=True),
             nn.Dropout(dropout), nn.Linear(96, 1)
         )
+        self.direct_loss_head = nn.Sequential(
+            nn.Linear(fusion_dim, 96), nn.LayerNorm(96), nn.SiLU(inplace=True),
+            nn.Dropout(dropout), nn.Linear(96, 1)
+        )
         # Important: attenuation = 1.2 * sigmoid(logit).
         # A zero bias means attenuation starts at 0.6, which predicts massive
         # cloud loss for every scene. Initialize to the training-set mean
@@ -350,6 +422,12 @@ class CloudRadiationV7(nn.Module):
         nn.init.normal_(self.attn_head[-1].weight, 0.0, 1e-4)
         nn.init.zeros_(self.loss_residual_head[-1].bias)
         nn.init.normal_(self.loss_residual_head[-1].weight, 0.0, 1e-4)
+
+        # Direct cloud-loss head starts at train mean cloud loss.
+        q = max(1e-4, min(1.0 - 1e-4, float(init_loss_prior_wm2) / max(1e-6, self.max_direct_loss_wm2)))
+        direct_bias = math.log(q / (1.0 - q))
+        nn.init.constant_(self.direct_loss_head[-1].bias, direct_bias)
+        nn.init.normal_(self.direct_loss_head[-1].weight, 0.0, 1e-4)
 
     def encode_image(self, image):
         b, t, c, h, w = image.shape
@@ -376,9 +454,14 @@ class CloudRadiationV7(nn.Module):
         attenuation = 1.2 * torch.sigmoid(self.attn_head(z))
         loss_from_attenuation = attenuation * clear_wm2
         residual = self.loss_scale * torch.tanh(self.loss_residual_head(z))
-        loss_wm2 = loss_from_attenuation + 0.25 * residual
+        physics_loss_wm2 = loss_from_attenuation + self.residual_factor * residual
+        direct_loss_wm2 = self.max_direct_loss_wm2 * torch.sigmoid(self.direct_loss_head(z))
+        blend = max(0.0, min(1.0, self.final_blend_direct))
+        loss_wm2 = blend * direct_loss_wm2 + (1.0 - blend) * physics_loss_wm2
         return {
             "loss_wm2": loss_wm2,
+            "direct_loss_wm2": direct_loss_wm2,
+            "physics_loss_wm2": physics_loss_wm2,
             "attenuation": attenuation,
             "loss_from_attenuation": loss_from_attenuation,
             "residual_wm2": residual,
@@ -457,8 +540,22 @@ def main():
     ap.add_argument("--fusion-dim", type=int, default=192)
     ap.add_argument("--dropout", type=float, default=0.12)
     ap.add_argument("--loss-scale", type=float, default=300.0)
-    ap.add_argument("--attenuation-weight", type=float, default=1.25)
-    ap.add_argument("--from-attenuation-weight", type=float, default=0.35)
+    ap.add_argument("--min-clear-wm2", type=float, default=120.0, help="Ignore very low clear-sky scenes in radiation loss/eval because they are noisy and weakly controllable.")
+    ap.add_argument("--residual-factor", type=float, default=0.05, help="Auxiliary physics-head residual strength after attenuation*clear_sky.")
+    ap.add_argument("--max-direct-loss-wm2", type=float, default=900.0)
+    ap.add_argument("--final-blend-direct", type=float, default=1.0, help="1.0 means final prediction is direct cloud loss. 0.0 means final prediction is physics attenuation head.")
+    ap.add_argument("--clean-drop-invalid", action="store_true", default=True)
+    ap.add_argument("--clean-drop-negative", action="store_true", default=True)
+    ap.add_argument("--clean-drop-high-cloud-low-loss", action="store_true", default=True)
+    ap.add_argument("--clean-drop-low-cloud-high-loss", action="store_true", default=False)
+    ap.add_argument("--high-cloud-thresh", type=float, default=0.65)
+    ap.add_argument("--low-cloud-thresh", type=float, default=0.05)
+    ap.add_argument("--low-loss-thresh-wm2", type=float, default=25.0)
+    ap.add_argument("--high-loss-thresh-wm2", type=float, default=280.0)
+    ap.add_argument("--min-loss-wm2", type=float, default=0.0)
+    ap.add_argument("--max-loss-wm2", type=float, default=900.0)
+    ap.add_argument("--attenuation-weight", type=float, default=0.75)
+    ap.add_argument("--from-attenuation-weight", type=float, default=0.25)
     ap.add_argument("--augment", action="store_true")
     ap.add_argument("--channels-last", action="store_true")
     ap.add_argument("--early-stop-patience", type=int, default=30)
@@ -483,6 +580,10 @@ def main():
     train_records = base.load_records(root, "train")
     val_records = base.load_records(root, "val")
     test_records = base.load_records(root, "test")
+
+    train_records = clean_radiation_records(train_records, args, "train")
+    val_records = clean_radiation_records(val_records, args, "val")
+    test_records = clean_radiation_records(test_records, args, "test")
     rad_stats = train_radiation_stats(train_records)
 
     x_norm = base.Normalizer.fit(np.asarray([base.feature_vector(r, raw_names) for r in train_records], dtype=np.float32))
@@ -492,6 +593,7 @@ def main():
         image_height=args.image_height, image_width=args.image_width,
         lookback=args.lookback, max_gap_days=args.max_gap_days,
         use_cloud_tensor=args.use_cloud_tensor,
+        min_clear_wm2=args.min_clear_wm2,
     )
     train_ds = RadiationSequenceDataset(records=train_records, augment=args.augment, **ds_args)
     val_ds = RadiationSequenceDataset(records=val_records, augment=False, **ds_args)
@@ -504,7 +606,7 @@ def main():
 
     # Determine in_channels from first sample.
     in_channels = int(train_ds[0]["image"].shape[1])
-    model = CloudRadiationV7(
+    model = CloudRadiationV8CleanDirect(
         in_channels=in_channels,
         num_cloud_features=len(cloud_names),
         stem_dim=args.stem_dim,
@@ -515,6 +617,10 @@ def main():
         dropout=args.dropout,
         loss_scale=args.loss_scale,
         init_attn_prior=rad_stats["mean_attn"],
+        residual_factor=args.residual_factor,
+        init_loss_prior_wm2=rad_stats["mean_loss"],
+        max_direct_loss_wm2=args.max_direct_loss_wm2,
+        final_blend_direct=args.final_blend_direct,
     ).to(device)
     if args.channels_last and device.type == "cuda":
         model = model.to(memory_format=torch.channels_last)
@@ -524,7 +630,7 @@ def main():
     scaler = GradScaler("cuda", enabled=(args.amp_dtype == "fp16" and device.type == "cuda"))
 
     print(json.dumps({
-        "architecture": "CloudRadiationV7",
+        "architecture": "CloudRadiationV8CleanDirect",
         "device": str(device),
         "in_channels": in_channels,
         "use_cloud_tensor": args.use_cloud_tensor,
@@ -536,6 +642,17 @@ def main():
         "target": "radiation_cloud_loss_wm2 via attenuation * clear_sky",
         "train_radiation_stats": rad_stats,
         "initial_attenuation_prior": rad_stats["mean_attn"],
+        "min_clear_wm2": args.min_clear_wm2,
+        "residual_factor": args.residual_factor,
+        "max_direct_loss_wm2": args.max_direct_loss_wm2,
+        "final_blend_direct": args.final_blend_direct,
+        "cleaning": {
+            "min_clear_wm2": args.min_clear_wm2,
+            "drop_negative": args.clean_drop_negative,
+            "drop_high_cloud_low_loss": args.clean_drop_high_cloud_low_loss,
+            "min_loss_wm2": args.min_loss_wm2,
+            "max_loss_wm2": args.max_loss_wm2
+        },
     }, indent=2))
 
     best = float("inf")
@@ -614,10 +731,14 @@ def main():
                 "dropout": args.dropout,
                 "loss_scale": args.loss_scale,
                 "init_attn_prior": rad_stats["mean_attn"],
+                "residual_factor": args.residual_factor,
+                "init_loss_prior_wm2": rad_stats["mean_loss"],
+                "max_direct_loss_wm2": args.max_direct_loss_wm2,
+                "final_blend_direct": args.final_blend_direct,
             },
             "train_radiation_stats": rad_stats,
             "metrics": row,
-            "architecture": "CloudRadiationV7",
+            "architecture": "CloudRadiationV8CleanDirect",
         }
         torch.save(ckpt, out_dir / "last.pt")
         if val["loss"]["mae"] < best:
