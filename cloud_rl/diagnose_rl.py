@@ -65,6 +65,24 @@ def _non_noop_rate(op: torch.Tensor) -> float:
     return float((op != NOOP).float().mean().detach().cpu())
 
 
+def _reward_extra_kwargs(batch: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "original_mask_sequence": batch.get("original_mask_sequence"),
+        "cloud_tensor_sequence": batch.get("cloud_tensor_sequence"),
+        "raw_feature_sequence": batch.get("raw_feature_sequence"),
+        "trend_features": batch.get("trend_features"),
+        "current_temperature": batch.get("current_temp"),
+        "radiation_context_features": batch.get("radiation_context_features"),
+        "radiation_clear_wm2": batch.get("radiation_clear_wm2"),
+        "current_radiation_loss_wm2": batch.get("current_radiation_loss_wm2"),
+    }
+
+
+def _error_tensor(info: Dict[str, torch.Tensor], reward_like: torch.Tensor) -> torch.Tensor:
+    value = info.get("radiation_error_wm2", info.get("temp_error_c"))
+    return value if value is not None else torch.zeros_like(reward_like)
+
+
 def _summarize_tensor_list(chunks: Dict[str, List[torch.Tensor]]) -> Dict[str, np.ndarray]:
     out: Dict[str, np.ndarray] = {}
     for key, values in chunks.items():
@@ -106,6 +124,7 @@ def main() -> None:
         improvement_gain=args.reward_improvement_gain,
         absolute_error_weight=args.reward_absolute_error_weight,
     ).to(device)
+    cfg["reward_target_kind"] = getattr(reward_fn, "reward_target_kind", "temperature")
 
     data_root = resolve_existing_path(cfg["data_root"])
     image_size = (int(cfg["image_height"]), int(cfg["image_width"]))
@@ -174,10 +193,7 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 noop_rast["property_maps"],
-                original_mask_sequence=batch.get("original_mask_sequence"),
-                raw_feature_sequence=batch.get("raw_feature_sequence"),
-                trend_features=batch.get("trend_features"),
-                current_temperature=batch.get("current_temp"),
+                **_reward_extra_kwargs(batch),
             )
             random_reward, random_info = reward_fn(
                 batch["original_mask"],
@@ -185,10 +201,7 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 random_rast["property_maps"],
-                original_mask_sequence=batch.get("original_mask_sequence"),
-                raw_feature_sequence=batch.get("raw_feature_sequence"),
-                trend_features=batch.get("trend_features"),
-                current_temperature=batch.get("current_temp"),
+                **_reward_extra_kwargs(batch),
             )
             create_reward, create_info = reward_fn(
                 batch["original_mask"],
@@ -196,10 +209,7 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 create_rast["property_maps"],
-                original_mask_sequence=batch.get("original_mask_sequence"),
-                raw_feature_sequence=batch.get("raw_feature_sequence"),
-                trend_features=batch.get("trend_features"),
-                current_temperature=batch.get("current_temp"),
+                **_reward_extra_kwargs(batch),
             )
             remove_reward, remove_info = reward_fn(
                 batch["original_mask"],
@@ -207,10 +217,7 @@ def main() -> None:
                 batch["raw_features"],
                 batch["target_temp"],
                 remove_rast["property_maps"],
-                original_mask_sequence=batch.get("original_mask_sequence"),
-                raw_feature_sequence=batch.get("raw_feature_sequence"),
-                trend_features=batch.get("trend_features"),
-                current_temperature=batch.get("current_temp"),
+                **_reward_extra_kwargs(batch),
             )
 
             policy_reward = None
@@ -232,13 +239,10 @@ def main() -> None:
                     batch["raw_features"],
                     batch["target_temp"],
                     policy_rast["property_maps"],
-                    original_mask_sequence=batch.get("original_mask_sequence"),
-                    raw_feature_sequence=batch.get("raw_feature_sequence"),
-                    trend_features=batch.get("trend_features"),
-                    current_temperature=batch.get("current_temp"),
+                    **_reward_extra_kwargs(batch),
                 )
                 policy_change = (policy_rast["generated_mask"] - batch["original_mask"]).abs().mean(dim=(1, 2, 3))
-                policy_temp_err = policy_info["temp_error_c"]
+                policy_temp_err = _error_tensor(policy_info, policy_reward)
                 op_hist = _op_histogram(sampled["op"])
                 non_noop = _non_noop_rate(sampled["op"])
                 chunks["policy_reward"].append(policy_reward.view(-1).cpu())
@@ -246,7 +250,7 @@ def main() -> None:
                 chunks["policy_temp_err"].append(policy_temp_err.view(-1).cpu())
                 chunks["policy_entropy"].append(sampled["entropy"].view(-1).cpu())
                 chunks["reward_delta"].append((policy_reward - noop_reward).view(-1).cpu())
-                chunks["temp_delta"].append((noop_info["temp_error_c"] - policy_temp_err).view(-1).cpu())
+                chunks["temp_delta"].append((_error_tensor(noop_info, noop_reward) - policy_temp_err).view(-1).cpu())
 
             noop_change = (noop_rast["generated_mask"] - batch["original_mask"]).abs().mean(dim=(1, 2, 3))
             random_change = (random_rast["generated_mask"] - batch["original_mask"]).abs().mean(dim=(1, 2, 3))
@@ -261,10 +265,14 @@ def main() -> None:
             chunks["random_change"].append(random_change.view(-1).cpu())
             chunks["create_change"].append(create_change.view(-1).cpu())
             chunks["remove_change"].append(remove_change.view(-1).cpu())
-            chunks["noop_temp_err"].append(noop_info["temp_error_c"].view(-1).cpu())
-            chunks["random_temp_err"].append(random_info["temp_error_c"].view(-1).cpu())
-            chunks["create_temp_err"].append(create_info["temp_error_c"].view(-1).cpu())
-            chunks["remove_temp_err"].append(remove_info["temp_error_c"].view(-1).cpu())
+            noop_err = _error_tensor(noop_info, noop_reward)
+            random_err = _error_tensor(random_info, random_reward)
+            create_err = _error_tensor(create_info, create_reward)
+            remove_err = _error_tensor(remove_info, remove_reward)
+            chunks["noop_temp_err"].append(noop_err.view(-1).cpu())
+            chunks["random_temp_err"].append(random_err.view(-1).cpu())
+            chunks["create_temp_err"].append(create_err.view(-1).cpu())
+            chunks["remove_temp_err"].append(remove_err.view(-1).cpu())
 
             record = {
                 "batch_idx": batch_idx,
@@ -273,10 +281,10 @@ def main() -> None:
                 "random_reward_mean": _tensor_mean(random_reward),
                 "create_reward_mean": _tensor_mean(create_reward),
                 "remove_reward_mean": _tensor_mean(remove_reward),
-                "noop_temp_err_mean": _tensor_mean(noop_info["temp_error_c"]),
-                "random_temp_err_mean": _tensor_mean(random_info["temp_error_c"]),
-                "create_temp_err_mean": _tensor_mean(create_info["temp_error_c"]),
-                "remove_temp_err_mean": _tensor_mean(remove_info["temp_error_c"]),
+                "noop_temp_err_mean": _tensor_mean(noop_err),
+                "random_temp_err_mean": _tensor_mean(random_err),
+                "create_temp_err_mean": _tensor_mean(create_err),
+                "remove_temp_err_mean": _tensor_mean(remove_err),
                 "noop_change_mean": _tensor_mean(noop_change),
                 "random_change_mean": _tensor_mean(random_change),
                 "create_change_mean": _tensor_mean(create_change),
@@ -290,7 +298,7 @@ def main() -> None:
                         "policy_temp_err_mean": _tensor_mean(policy_temp_err),
                         "policy_change_mean": _tensor_mean(policy_change),
                         "reward_delta_mean": _tensor_mean(policy_reward - noop_reward),
-                        "temp_delta_mean": _tensor_mean(noop_info["temp_error_c"] - policy_temp_err),
+                        "temp_delta_mean": _tensor_mean(noop_err - policy_temp_err),
                         "non_noop_rate": non_noop,
                         "op_histogram": op_hist,
                     }
@@ -305,10 +313,10 @@ def main() -> None:
                 f"remove_reward={_tensor_mean(remove_reward):.4f} "
                 f"delta={_tensor_mean(policy_reward - noop_reward):+.4f} "
                 f"policy_temp_err={_tensor_mean(policy_temp_err):.4f} "
-                f"noop_temp_err={_tensor_mean(noop_info['temp_error_c']):.4f} "
-                f"random_temp_err={_tensor_mean(random_info['temp_error_c']):.4f} "
-                f"create_temp_err={_tensor_mean(create_info['temp_error_c']):.4f} "
-                f"remove_temp_err={_tensor_mean(remove_info['temp_error_c']):.4f} "
+                f"noop_temp_err={_tensor_mean(noop_err):.4f} "
+                f"random_temp_err={_tensor_mean(random_err):.4f} "
+                f"create_temp_err={_tensor_mean(create_err):.4f} "
+                f"remove_temp_err={_tensor_mean(remove_err):.4f} "
                 f"policy_change={_tensor_mean(policy_change):.4f} "
                 f"noop_rate={non_noop:.3f}"
                 )
@@ -319,10 +327,10 @@ def main() -> None:
                     f"random_reward={_tensor_mean(random_reward):.4f} "
                     f"create_reward={_tensor_mean(create_reward):.4f} "
                     f"remove_reward={_tensor_mean(remove_reward):.4f} "
-                    f"noop_temp_err={_tensor_mean(noop_info['temp_error_c']):.4f} "
-                    f"random_temp_err={_tensor_mean(random_info['temp_error_c']):.4f} "
-                    f"create_temp_err={_tensor_mean(create_info['temp_error_c']):.4f} "
-                    f"remove_temp_err={_tensor_mean(remove_info['temp_error_c']):.4f} "
+                    f"noop_temp_err={_tensor_mean(noop_err):.4f} "
+                    f"random_temp_err={_tensor_mean(random_err):.4f} "
+                    f"create_temp_err={_tensor_mean(create_err):.4f} "
+                    f"remove_temp_err={_tensor_mean(remove_err):.4f} "
                     f"noop_change={_tensor_mean(noop_change):.4f} "
                     f"random_change={_tensor_mean(random_change):.4f} "
                     f"create_change={_tensor_mean(create_change):.4f} "
