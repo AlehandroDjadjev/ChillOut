@@ -2,19 +2,18 @@ config.js
 .env
 .DS_Store
 Thumbs.db
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+dataset.out/*
+node_modules/
+.*
+!.gitignore
+
+# Python (worker)
+__pycache__/
+*.pyc
 
 # Agent/editor tooling and local uploads
 .claude/
 .uploads/
-<<<<<<< HEAD
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
 # Node
 node_modules/

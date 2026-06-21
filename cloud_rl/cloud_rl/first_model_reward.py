@@ -63,6 +63,8 @@ def _align_by_names(
         else:
             columns.append(raw_features[:, index : index + 1])
     return torch.cat(columns, dim=1)
+<<<<<<< HEAD
+=======
 
 
 def _weighted_mean(values: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
@@ -96,6 +98,7 @@ def _masked_quantile(values: torch.Tensor, weights: torch.Tensor, q: float) -> t
         else:
             rows.append(torch.quantile(selected.float(), q).view(1).to(dtype=row_values.dtype))
     return torch.stack(rows, dim=0)
+>>>>>>> 8e6ceff566bd94aa0e4587288d0525161d408ea7
 
 
 class ResBlock(nn.Module):
@@ -324,10 +327,7 @@ def _strip_module_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tens
 
 
 <<<<<<< HEAD
-<<<<<<< HEAD
 =======
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 def _strip_compile_prefix(state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     if not any(key.startswith("_orig_mod.") for key in state):
         return state
@@ -351,10 +351,7 @@ def _load_v6_model_class():
     return module.ResidualTrendSplitConvLSTM
 
 
-<<<<<<< HEAD
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
+>>>>>>> 8e6ceff566bd94aa0e4587288d0525161d408ea7
 class CloudTempCheckpointReward(AbstractRewardModel):
     """Reward model backed by a saved CloudTempModel checkpoint.
 
@@ -409,6 +406,10 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         self.delta_std_c = float(delta_norm.get("std", self.target_std_c)) or 1.0
         self.context_scale = float((ckpt.get("args") or {}).get("context_scale", 0.15))
 
+<<<<<<< HEAD
+        state = _strip_module_prefix(ckpt["model_state"])
+        self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
+=======
         state = _strip_compile_prefix(_strip_module_prefix(ckpt["model_state"]))
         if self.model_kind == "cloudforced_radiation_v6":
             model_cls = _load_v6_model_class()
@@ -420,6 +421,7 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             self.model = CloudWorldInteractionModel(**kwargs)
         else:
             self.model = CloudTempDeepModel(num_features=len(self.model_feature_names))
+>>>>>>> 8e6ceff566bd94aa0e4587288d0525161d408ea7
         self.model.load_state_dict(state)
         if torch.cuda.is_available():
             self.model = self.model.to(memory_format=torch.channels_last)
@@ -440,6 +442,23 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             f"feature_keys={len(FEATURE_KEYS)}, model_feature_names={len(self.model_feature_names)}."
         )
 
+<<<<<<< HEAD
+    def _prepare_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
+        raw = feature_vector.float()
+        source_names = self._resolve_feature_names(raw.shape[1])
+        if raw.shape[1] == len(self.model_feature_names):
+            processed = raw
+        else:
+            aligned = _align_by_names(raw, source_names, self.raw_feature_names)
+            processed = _transform_raw_features(aligned, self.raw_feature_names)
+
+        expected_dim = self.feature_mean.shape[0]
+        if processed.shape[1] < expected_dim:
+            processed = F.pad(processed, (0, expected_dim - processed.shape[1]))
+        elif processed.shape[1] > expected_dim:
+            processed = processed[:, :expected_dim]
+        return (processed - self.feature_mean) / self.feature_std
+=======
     def _align_raw_features(self, feature_vector: torch.Tensor) -> torch.Tensor:
         raw = feature_vector.float()
         source_names = self._resolve_feature_names(raw.shape[1])
@@ -557,6 +576,7 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             set_feature("cloud_s2_texture_std", old("cloud_s2_texture_std") + texture_delta + action_area * action_texture, 0.0, None)
 
         return updated
+>>>>>>> 8e6ceff566bd94aa0e4587288d0525161d408ea7
 
     def _prepare_mask(self, mask: torch.Tensor) -> torch.Tensor:
         if mask.shape[-2:] == (self.image_height, self.image_width):
@@ -568,18 +588,7 @@ class CloudTempCheckpointReward(AbstractRewardModel):
             align_corners=False,
         )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-    def _predict_temperature(self, mask: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
-        if self.model_kind == "deep":
-            return self.model(mask, features)
-
-=======
     def _split_cloud_world(self, normalized_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
-    def _split_cloud_world(self, normalized_features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         raw_index = {name: i for i, name in enumerate(self.raw_feature_names)}
         cloud_idx = [raw_index[name] for name in self.cloud_feature_names]
         world_idx = [raw_index[name] for name in self.world_feature_names]
@@ -645,6 +654,19 @@ class CloudTempCheckpointReward(AbstractRewardModel):
         trend_features: Optional[torch.Tensor] = None,
         current_temperature: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+<<<<<<< HEAD
+        mask = self._prepare_mask(generated_mask)
+        if mask.ndim == 4 and mask.is_cuda:
+            mask = mask.contiguous(memory_format=torch.channels_last)
+        features = self._prepare_features(feature_vector)
+
+        with torch.inference_mode():
+            if mask.is_cuda:
+                with torch.autocast(device_type="cuda", enabled=True):
+                    predicted_temperature = self.model(mask, features)
+            else:
+                predicted_temperature = self.model(mask, features)
+=======
         original = self._prepare_mask(original_mask)
         generated = self._prepare_mask(generated_mask)
         if original.ndim == 4 and original.is_cuda:
@@ -671,6 +693,7 @@ class CloudTempCheckpointReward(AbstractRewardModel):
                 original_seq = original[:, None, :, :, :].expand(-1, max(1, self.lookback), -1, -1, -1).contiguous()
             generated_seq = original_seq.clone()
             generated_seq[:, -1] = generated
+>>>>>>> 8e6ceff566bd94aa0e4587288d0525161d408ea7
 
             if raw_feature_sequence is not None:
                 original_feature_seq = self._normalize_raw_sequence(raw_feature_sequence.float())
