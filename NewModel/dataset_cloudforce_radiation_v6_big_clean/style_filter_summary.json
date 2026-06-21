@@ -1,0 +1,33 @@
+{
+  "source": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\dataset_cloudforce_radiation_v6_big",
+  "out": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\dataset_cloudforce_radiation_v6_big_clean",
+  "rules": {
+    "mask_channel": 0,
+    "white_threshold": 0.95,
+    "black_threshold": 0.02,
+    "max_white_frac": 0.95,
+    "max_black_frac": 0.95,
+    "min_mask_std": 0.0,
+    "channels": "0,1,2,4,5,7"
+  },
+  "splits": {
+    "train": {
+      "kept": 694,
+      "dropped": 0,
+      "original": 694
+    },
+    "val": {
+      "kept": 299,
+      "dropped": 0,
+      "original": 299
+    },
+    "test": {
+      "kept": 257,
+      "dropped": 0,
+      "original": 257
+    }
+  },
+  "total_kept": 1250,
+  "total_dropped": 0,
+  "dry_run": false
+}

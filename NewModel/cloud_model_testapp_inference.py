@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import base64
+import gc
 import io
 import math
 import random
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -166,6 +168,57 @@ def tensor_to_cloud_photo(seq: torch.Tensor, frame: int = -1, size: int = 320) -
     return image.resize((size, size), Image.Resampling.BILINEAR)
 
 
+def tensor_to_cloud_mask(seq: torch.Tensor, frame: int = -1, size: int = 320) -> Image.Image:
+    arr = seq.detach().cpu().float().numpy()
+    if arr.ndim == 5:
+        arr = arr[0]
+    frame_arr = arr[frame]
+    c, h, w = frame_arr.shape
+    planes = []
+    for ch in (0, 1, 4, 5):
+        if ch < c:
+            planes.append(frame_arr[ch])
+    cloud = np.max(np.stack(planes, axis=0), axis=0) if planes else np.zeros((h, w), dtype=np.float32)
+    cloud = np.clip(cloud, 0.0, 1.0)
+    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb[..., 0] = (cloud * 235).astype(np.uint8)
+    rgb[..., 1] = (np.sqrt(cloud) * 255).astype(np.uint8)
+    rgb[..., 2] = (np.clip(cloud * 1.25, 0, 1) * 255).astype(np.uint8)
+    return Image.fromarray(rgb, mode="RGB").resize((size, size), Image.Resampling.BILINEAR)
+
+
+def tensor_added_delta(before: torch.Tensor, after: torch.Tensor, frame: int = -1, size: int = 320) -> Image.Image:
+    a = before.detach().cpu().float()
+    b = after.detach().cpu().float()
+    if a.ndim == 5:
+        a = a[0]
+    if b.ndim == 5:
+        b = b[0]
+    aa = a[frame]
+    bb = b[frame]
+    channels = [ch for ch in (0, 1, 4, 5, 7) if ch < aa.size(0)]
+    if channels:
+        diff = (bb[channels] - aa[channels]).numpy()
+        pos = np.clip(diff, 0.0, None).max(axis=0)
+        neg = np.clip(-diff, 0.0, None).max(axis=0)
+        base = np.clip(aa[channels].numpy(), 0.0, 1.0).max(axis=0)
+    else:
+        h, w = aa.shape[-2:]
+        pos = np.zeros((h, w), dtype=np.float32)
+        neg = np.zeros((h, w), dtype=np.float32)
+        base = np.zeros((h, w), dtype=np.float32)
+
+    scale = 0.35
+    pos = np.clip(pos / scale, 0.0, 1.0)
+    neg = np.clip(neg / scale, 0.0, 1.0)
+    base = np.clip(base * 0.30, 0.0, 0.30)
+    rgb = np.zeros((*base.shape, 3), dtype=np.uint8)
+    rgb[..., 0] = np.clip(base * 255 + pos * 255, 0, 255).astype(np.uint8)
+    rgb[..., 1] = np.clip(base * 255 + pos * 185 + neg * 65, 0, 255).astype(np.uint8)
+    rgb[..., 2] = np.clip(base * 255 + neg * 255, 0, 255).astype(np.uint8)
+    return Image.fromarray(rgb, mode="RGB").resize((size, size), Image.Resampling.BILINEAR)
+
+
 def tensor_to_strip(seq: torch.Tensor, size_each: int = 160) -> Image.Image:
     arr = seq.detach().cpu().float()
     if arr.ndim == 5:
@@ -238,13 +291,17 @@ class InferenceConfig:
     split: str = "val"
     force_cpu: bool = False
     min_clear_wm2: Optional[float] = None
+    idle_offload: bool = True
+    max_oracle_batch_size: int = 8
 
 
 class CloudTemplateInference:
     def __init__(self, config: InferenceConfig):
         self.config = config
-        self.device = torch.device("cpu" if config.force_cpu or not torch.cuda.is_available() else "cuda")
-        if self.device.type == "cuda":
+        self.compute_device = torch.device("cpu" if config.force_cpu or not torch.cuda.is_available() else "cuda")
+        self.device = torch.device("cpu")
+        self._request_lock = threading.Lock()
+        if self.compute_device.type == "cuda":
             torch.backends.cudnn.benchmark = True
             torch.set_float32_matmul_precision("high")
 
@@ -276,7 +333,7 @@ class CloudTemplateInference:
                 min_clear_wm2=float(self.cleaner.min_clear_wm2),
             )
 
-        self.codebook = self.selector_ckpt["codebook"].to(self.device).float()
+        self.codebook = self.selector_ckpt["codebook"].float()
         self.codebook_meta = list(self.selector_ckpt.get("codebook_meta", []))
         self.mode_names = list(self.selector_ckpt.get("mode_names", v13.MODE_NAMES))
         self.cov_channels = parse_channels(str(self.train_args.get("coverage_channels", "0,1,2")), int(self.selector_ckpt.get("in_channels", 8)))
@@ -292,24 +349,52 @@ class CloudTemplateInference:
             base=int(self.train_args.get("base_channels", 32)),
             hidden=int(self.train_args.get("hidden_dim", 192)),
             loss_scale=float(self.selector_ckpt.get("loss_scale", 300.0)),
-        ).to(self.device)
+        )
         self.selector.load_state_dict(strip_prefix(self.selector_ckpt["model_state"]))
         self.selector.eval()
+        for p in self.selector.parameters():
+            p.requires_grad_(False)
 
-        self.reward_model = v8.CloudRadiationV8CleanDirect(**self.reward_ckpt["model_kwargs"]).to(self.device)
+        self.reward_model = v8.CloudRadiationV8CleanDirect(**self.reward_ckpt["model_kwargs"])
         self.reward_model.load_state_dict(strip_prefix(self.reward_ckpt["model_state"]))
         self.reward_model.eval()
         for p in self.reward_model.parameters():
             p.requires_grad_(False)
 
         self.raw_mean, self.raw_std = get_cloud_raw_stats(self.x_norm, self.raw_names, self.cloud_names, self.device)
+        if self.compute_device.type == "cuda" and not self.config.idle_offload:
+            self._move_runtime_to(self.compute_device)
+
+    def _move_runtime_to(self, device: torch.device) -> None:
+        if self.device == device:
+            return
+        self.codebook = self.codebook.to(device).float()
+        self.selector.to(device)
+        self.reward_model.to(device)
+        self.raw_mean = self.raw_mean.to(device)
+        self.raw_std = self.raw_std.to(device)
+        self.device = device
+
+    def _release_idle_cuda(self) -> None:
+        if self.compute_device.type != "cuda" or not self.config.idle_offload:
+            return
+        self._move_runtime_to(torch.device("cpu"))
+        gc.collect()
+        torch.cuda.empty_cache()
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
     def split_count(self, split: str) -> int:
         return len(self.datasets[split])
 
     def meta(self) -> Dict[str, Any]:
         return {
-            "device": str(self.device),
+            "device": str(self.compute_device) + (" (offloaded while idle)" if self.config.idle_offload and self.compute_device.type == "cuda" else ""),
+            "resident_device": str(self.device),
+            "idle_offload": bool(self.config.idle_offload and self.compute_device.type == "cuda"),
+            "max_oracle_batch_size": int(self.config.max_oracle_batch_size),
             "splits": {split: len(ds) for split, ds in self.datasets.items()},
             "codebook_size": int(self.codebook.size(0)),
             "modes": self.mode_names,
@@ -325,8 +410,19 @@ class CloudTemplateInference:
         window = ds.windows[index]
         return window.records[-1]
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def generate(
+        self,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        with self._request_lock:
+            self._move_runtime_to(self.compute_device)
+            try:
+                return self._generate_impl(**kwargs)
+            finally:
+                self._release_idle_cuda()
+
+    def _generate_impl(
         self,
         split: str,
         sample_index: int,
@@ -346,6 +442,7 @@ class CloudTemplateInference:
         ds = self.datasets[split]
         if sample_index < 0 or sample_index >= len(ds):
             raise IndexError(f"sample_index {sample_index} outside split length {len(ds)}")
+        oracle_batch_size = max(1, min(int(oracle_batch_size), int(self.config.max_oracle_batch_size)))
 
         random.seed(seed)
         np.random.seed(seed)
@@ -495,6 +592,10 @@ class CloudTemplateInference:
                 "model_input": png_data_url(tensor_to_cloud_photo(input_img)),
                 "selected_template": png_data_url(tensor_to_cloud_photo(chosen_template)),
                 "generated": png_data_url(tensor_to_cloud_photo(chosen_output)),
+                "original_mask": png_data_url(tensor_to_cloud_mask(image)),
+                "template_mask": png_data_url(tensor_to_cloud_mask(chosen_template)),
+                "generated_mask": png_data_url(tensor_to_cloud_mask(chosen_output)),
+                "added_delta": png_data_url(tensor_added_delta(input_img, chosen_output)),
                 "original_strip": png_data_url(tensor_to_strip(image)),
                 "generated_strip": png_data_url(tensor_to_strip(chosen_output)),
                 "channels": png_data_url(tensor_channel_grid(chosen_output, self.view_channels)),

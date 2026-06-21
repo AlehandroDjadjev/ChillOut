@@ -1,0 +1,154 @@
+{
+  "what_this_tests": "V12 residual editor diagnostic: original/input/allowed-mask/gate/residual/output plus frozen bottom reward scores.",
+  "sample": {
+    "split": "val",
+    "sample_index": 65,
+    "sample_id": "london_uk_20250929T110000Z_s2b_msil2a_20250929t1057",
+    "location": "london_uk",
+    "anchor": "2025-09-29T11:00:00+00:00",
+    "actual_dataset_loss_wm2": 37.0596809387207,
+    "clear_sky_wm2": 570.0596923828125
+  },
+  "target_loss_wm2": 570.0596923828125,
+  "target_mode": "absolute_loss_wm2",
+  "target_was_clamped": true,
+  "checkpoint": {
+    "generator_checkpoint": "runs/cloud_radiation_generator_v12_residual_editor/best_generator.pt",
+    "generator_epoch": 43,
+    "generator_architecture": "CloudResidualEditorV12",
+    "reward_checkpoint": "runs/cloud_radiation_v8_clean_direct1/best.pt",
+    "max_delta": 0.45,
+    "num_blobs": 4,
+    "support_dilation_kernel": 9
+  },
+  "input_setup": {
+    "input_mode": "dropout",
+    "input_info": {
+      "mode": "white_dropout_only",
+      "white_drop_prob": 0.5,
+      "white_threshold": 0.35,
+      "actual_drop_rate_on_white": 0.5001391257517278
+    },
+    "dropped_mask_mean": 0.6197558641433716,
+    "dropped_mask_white_frac_ge_0p50": 0.619755859375
+  },
+  "predictions": {
+    "original_pred_loss_wm2": 111.10700225830078,
+    "input_pred_loss_wm2": 134.2805633544922,
+    "output_pred_loss_wm2": 212.4111785888672
+  },
+  "errors_to_target": {
+    "original_abs_error_wm2": 458.9526901245117,
+    "input_abs_error_wm2": 435.7791290283203,
+    "output_abs_error_wm2": 357.6485137939453
+  },
+  "improvements": {
+    "output_vs_input_improvement_wm2": 78.130615234375,
+    "output_vs_original_improvement_wm2": 101.3041763305664,
+    "output_pred_minus_input_pred_wm2": 78.130615234375,
+    "output_pred_minus_original_pred_wm2": 101.3041763305664
+  },
+  "edit_stats": {
+    "allowed_mask": {
+      "name": "allowed_mask",
+      "mean": 0.9326357841491699,
+      "min": 0.0,
+      "max": 1.0,
+      "nonzero_frac_gt_0p01": 0.93365234375,
+      "white_frac_ge_0p50": 0.93365234375,
+      "per_frame_mean": [
+        0.9317227005958557,
+        0.9395254254341125,
+        0.9287011623382568,
+        0.930593729019165
+      ],
+      "per_frame_white_frac_ge_0p50": [
+        0.932578125,
+        0.9417578125,
+        0.9290234375,
+        0.93125
+      ]
+    },
+    "gate": {
+      "name": "gate",
+      "mean": 0.9449498653411865,
+      "min": 0.13472414016723633,
+      "max": 0.996346652507782,
+      "nonzero_frac_gt_0p01": 1.0,
+      "white_frac_ge_0p50": 0.96873046875,
+      "per_frame_mean": [
+        0.9164204597473145,
+        0.950194776058197,
+        0.9614048600196838,
+        0.9517794847488403
+      ],
+      "per_frame_white_frac_ge_0p50": [
+        0.95765625,
+        0.9665625,
+        0.9815234375,
+        0.9691796875
+      ]
+    },
+    "residual_abs_mean": 0.8902832865715027,
+    "residual_abs_max": 0.9999441504478455,
+    "image_l1_input_vs_original": 0.11291108280420303,
+    "image_l1_output_vs_input": 0.18974760174751282,
+    "image_l1_output_vs_original": 0.21992160379886627,
+    "output_white_frac_ge_0p50": 0.227821044921875,
+    "input_white_frac_ge_0p50": 0.17662841796875,
+    "original_white_frac_ge_0p50": 0.2930029296875
+  },
+  "outputs": {
+    "result_json": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\result.json",
+    "comparison_sheets": [
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_00_cloud_mask_or_fraction.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_01_cloud_probability.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_02_white_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_04_high_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_05_medium_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\comparison_sheets\\comparison_channel_07_visible_gray.png"
+    ],
+    "image_channel_stats_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\image_channel_stats.csv",
+    "image_diff_stats_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\image_diff_stats.csv",
+    "derived_cloud_scalar_features_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\derived_cloud_scalar_features.csv",
+    "target_sweep_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\generator_v12_sample_050_target450\\target_sweep.csv"
+  },
+  "target_sweep": [
+    {
+      "target_loss_wm2": 100.0,
+      "pred_loss_wm2": 93.97712707519531,
+      "abs_error_wm2": 6.0228729248046875,
+      "image_l1_vs_input": 0.06415186077356339,
+      "gate_mean": 0.3532562553882599,
+      "output_white_frac_ge_0p50": 0.1907568359375
+    },
+    {
+      "target_loss_wm2": 250.0,
+      "pred_loss_wm2": 212.4027099609375,
+      "abs_error_wm2": 37.5972900390625,
+      "image_l1_vs_input": 0.18808269500732422,
+      "gate_mean": 0.9372501969337463,
+      "output_white_frac_ge_0p50": 0.22622802734375
+    },
+    {
+      "target_loss_wm2": 450.0,
+      "pred_loss_wm2": 212.4106903076172,
+      "abs_error_wm2": 237.5893096923828,
+      "image_l1_vs_input": 0.18966777622699738,
+      "gate_mean": 0.9442939758300781,
+      "output_white_frac_ge_0p50": 0.227655029296875
+    },
+    {
+      "target_loss_wm2": 570.0596923828125,
+      "pred_loss_wm2": 212.4111785888672,
+      "abs_error_wm2": 357.6485137939453,
+      "image_l1_vs_input": 0.1897476315498352,
+      "gate_mean": 0.9449499249458313,
+      "output_white_frac_ge_0p50": 0.227821044921875
+    }
+  ],
+  "warnings": [
+    "Gate is very open; model may be over-editing.",
+    "Allowed mask covers most of image; edit space is too broad."
+  ]
+}

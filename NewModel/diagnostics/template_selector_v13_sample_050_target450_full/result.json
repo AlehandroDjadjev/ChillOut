@@ -1,0 +1,110 @@
+{
+  "what_this_tests": "V13 template selector diagnostic with oracle brute-force comparison over the saved real-cloud codebook.",
+  "sample": {
+    "split": "val",
+    "sample_index": 50,
+    "sample_id": "lisbon_pt_20250605T120000Z_s2c_msil2a_20250605t1133",
+    "location": "lisbon_pt",
+    "anchor": "2025-06-05T12:00:00+00:00",
+    "actual_dataset_loss_wm2": 14.04114818572998,
+    "clear_sky_wm2": 894.0411376953125
+  },
+  "target_loss_wm2": 100.0,
+  "target_mode": "absolute_loss_wm2",
+  "target_was_clamped": false,
+  "input_setup": {
+    "input_mode": "full",
+    "input_info": {
+      "mode": "FULL_UNTOUCHED_IMAGE"
+    }
+  },
+  "base": {
+    "original_pred_loss_wm2": 93.69641876220703,
+    "input_pred_loss_wm2": 93.61782836914062,
+    "original_abs_error_wm2": 6.303581237792969,
+    "input_abs_error_wm2": 6.382171630859375,
+    "input_coverage": 0.4976651072502136,
+    "original_coverage": 0.4976651072502136
+  },
+  "selector_choice": {
+    "template_index": 108,
+    "template_meta": {
+      "dataset_index": 117,
+      "sample_id": "oslo_no_20250804T110000Z_s2b_msil2a_20250804t1036",
+      "location": "oslo_no",
+      "anchor": "2025-08-04T11:00:00+00:00",
+      "coverage": 0.6610787014166514
+    },
+    "mode_index": 4,
+    "mode": "max_add_cloud",
+    "template_prob": 0.20462638139724731,
+    "mode_prob": 0.82277512550354,
+    "pred_loss_wm2": 211.6493377685547,
+    "abs_error_wm2": 111.64933776855469,
+    "improvement_vs_input_wm2": -105.26716613769531,
+    "improvement_vs_original_wm2": -105.34575653076172,
+    "coverage": 0.7731917500495911,
+    "image_l1_vs_input": 0.21149584650993347
+  },
+  "oracle_best": {
+    "template_index": 23,
+    "mode_index": 6,
+    "mode": "soft_add_cloud",
+    "template_sample_id": "athens_gr_20250429T090000Z_s2b_msil2a_20250429t0905",
+    "template_location": "athens_gr",
+    "template_anchor": "2025-04-29T09:00:00+00:00",
+    "template_coverage": 0.2572018653154373,
+    "pred_loss_wm2": 98.60623931884766,
+    "target_loss_wm2": 100.0,
+    "abs_error_wm2": 1.3937606811523438,
+    "score": 2.459512948989868,
+    "image_l1_vs_input": 0.042630091309547424,
+    "coverage": 0.5454065203666687,
+    "coverage_base": 0.4976651072502136,
+    "improvement_vs_input_wm2": 4.988410949707031,
+    "improvement_vs_original_wm2": 4.909820556640625
+  },
+  "selector_vs_oracle": {
+    "selector_error_minus_oracle_error_wm2": 110.25557708740234,
+    "selector_pred_minus_oracle_pred_wm2": 113.04309844970703,
+    "same_template": false,
+    "same_mode": false
+  },
+  "checkpoint": {
+    "selector_checkpoint": "runs/cloud_template_selector_v13/best_selector.pt",
+    "selector_epoch": 3,
+    "selector_architecture": "CloudTemplateSelectorV13",
+    "reward_checkpoint": "runs/cloud_radiation_v8_clean_direct1/best.pt",
+    "codebook_size": 131,
+    "mode_names": [
+      "keep",
+      "replace",
+      "alpha_0p50",
+      "alpha_0p75",
+      "max_add_cloud",
+      "min_remove_cloud",
+      "soft_add_cloud"
+    ]
+  },
+  "outputs": {
+    "result_json": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\result.json",
+    "comparison_sheets": [
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_00_cloud_mask_or_fraction.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_01_cloud_probability.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_02_white_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_04_high_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_05_medium_cloud.png",
+      "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\comparison_sheets\\comparison_channel_07_visible_gray.png"
+    ],
+    "oracle_candidate_scores_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\oracle_candidate_scores.csv",
+    "selector_top_templates_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\selector_top_templates.csv",
+    "selector_mode_probs_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\selector_mode_probs.csv",
+    "image_channel_stats_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\image_channel_stats.csv",
+    "image_diff_stats_csv": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\diagnostics\\template_selector_v13_sample_050_target450_full\\image_diff_stats.csv"
+  },
+  "warnings": [
+    "Selector output is worse than input.",
+    "Oracle over saved codebook barely improves input; action space/codebook may be insufficient for this sample.",
+    "Selector is far from oracle; training/selection model is the bottleneck, not codebook/action space."
+  ]
+}

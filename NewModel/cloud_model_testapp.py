@@ -391,6 +391,10 @@ function renderResult(data) {
         ${imageFigure(data.images.model_input, "Model input")}
         ${imageFigure(data.images.selected_template, "Selected cloud template")}
         ${imageFigure(data.images.generated, "Generated and verified")}
+        ${imageFigure(data.images.original_mask, "Original cloud mask")}
+        ${imageFigure(data.images.template_mask, "Template cloud mask")}
+        ${imageFigure(data.images.generated_mask, "Generated cloud mask")}
+        ${imageFigure(data.images.added_delta, "Delta: added red, removed blue")}
       </div>
       <div class="wide">
         ${imageFigure(data.images.original_strip, "Original sequence")}
@@ -474,7 +478,7 @@ class GenerateRequest(BaseModel):
     wm2_per_c: float = Field(default=80.0, gt=0)
     input_mode: str = Field(default="full")
     run_oracle: bool = True
-    oracle_batch_size: int = Field(default=32, ge=1, le=256)
+    oracle_batch_size: int = Field(default=8, ge=1, le=64)
     penalty_l1: float = 25.0
     penalty_coverage: float = 80.0
     seed: int = 123
@@ -521,6 +525,8 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--force-cpu", action="store_true")
+    parser.add_argument("--keep-gpu-resident", action="store_true", help="Keep models/codebook on CUDA while idle. Default offloads to CPU after each request.")
+    parser.add_argument("--max-oracle-batch-size", type=int, default=8, help="Upper bound for codebook oracle chunks to limit peak VRAM.")
     args = parser.parse_args()
 
     engine = CloudTemplateInference(
@@ -529,6 +535,8 @@ def main() -> None:
             selector_checkpoint=Path(args.selector_checkpoint),
             reward_checkpoint=Path(args.reward_checkpoint),
             force_cpu=bool(args.force_cpu),
+            idle_offload=not bool(args.keep_gpu_resident),
+            max_oracle_batch_size=max(1, int(args.max_oracle_batch_size)),
         )
     )
     app = create_app(engine)

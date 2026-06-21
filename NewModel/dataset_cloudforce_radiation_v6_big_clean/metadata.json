@@ -1,0 +1,225 @@
+{
+  "target": "target_temperature_c",
+  "target_description": "temperature_2m at anchor + 5.0 days",
+  "radiation_targets": [
+    "radiation_cloud_loss_wm2",
+    "radiation_cloud_attenuation",
+    "radiation_cloud_transmission",
+    "radiation_shortwave_observed_wm2",
+    "radiation_clear_sky_proxy_wm2",
+    "radiation_daylight_valid"
+  ],
+  "radiation_target_description": "Scene-time shortwave cloud effect derived from Open-Meteo shortwave radiation and a simple solar clear-sky proxy.",
+  "style_filter": {
+    "source": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\dataset_cloudforce_radiation_v6_big",
+    "out": "C:\\Users\\marti\\allFolder\\code\\ChillOut\\NewModel\\dataset_cloudforce_radiation_v6_big_clean",
+    "rules": {
+      "mask_channel": 0,
+      "white_threshold": 0.95,
+      "black_threshold": 0.02,
+      "max_white_frac": 0.95,
+      "max_black_frac": 0.95,
+      "min_mask_std": 0.0,
+      "channels": "0,1,2,4,5,7"
+    },
+    "splits": {
+      "train": {
+        "kept": 694,
+        "dropped": 0,
+        "original": 694
+      },
+      "val": {
+        "kept": 299,
+        "dropped": 0,
+        "original": 299
+      },
+      "test": {
+        "kept": 257,
+        "dropped": 0,
+        "original": 257
+      }
+    },
+    "total_kept": 1250,
+    "total_dropped": 0,
+    "dry_run": false
+  },
+  "radiation_thresholds": {
+    "daylight_clear_threshold_wm2": 50.0,
+    "min_transmission": 0.0,
+    "max_transmission": 1.5,
+    "min_attenuation": -0.5,
+    "max_attenuation": 1.2,
+    "min_loss_wm2": -250.0,
+    "max_loss_wm2": 1200.0
+  },
+  "raw_feature_names": [
+    "cloud_s2_fraction",
+    "cloud_s2_prob_mean",
+    "cloud_s2_prob_std",
+    "cloud_s2_prob_p90",
+    "cloud_s2_aot_mean",
+    "cloud_s2_cirrus_fraction",
+    "cloud_s2_high_fraction",
+    "cloud_s2_medium_fraction",
+    "cloud_s2_edge_density",
+    "cloud_s2_texture_std",
+    "world_shortwave_radiation",
+    "world_relative_humidity_2m",
+    "world_dew_point_2m",
+    "world_surface_pressure",
+    "world_pressure_msl",
+    "world_wind_speed_10m",
+    "world_wind_u_10m",
+    "world_wind_v_10m",
+    "world_precipitation",
+    "world_snow_depth",
+    "world_vapour_pressure_deficit"
+  ],
+  "model_feature_names": [
+    "cloud_s2_fraction",
+    "cloud_s2_prob_mean",
+    "cloud_s2_prob_std",
+    "cloud_s2_prob_p90",
+    "cloud_s2_aot_mean",
+    "cloud_s2_cirrus_fraction",
+    "cloud_s2_high_fraction",
+    "cloud_s2_medium_fraction",
+    "cloud_s2_edge_density",
+    "cloud_s2_texture_std",
+    "world_shortwave_radiation",
+    "world_relative_humidity_2m",
+    "world_dew_point_2m",
+    "world_surface_pressure",
+    "world_pressure_msl",
+    "world_wind_speed_10m",
+    "world_wind_u_10m",
+    "world_wind_v_10m",
+    "world_precipitation",
+    "world_snow_depth",
+    "world_vapour_pressure_deficit"
+  ],
+  "cloud_feature_names": [
+    "cloud_s2_fraction",
+    "cloud_s2_prob_mean",
+    "cloud_s2_prob_std",
+    "cloud_s2_prob_p90",
+    "cloud_s2_aot_mean",
+    "cloud_s2_cirrus_fraction",
+    "cloud_s2_high_fraction",
+    "cloud_s2_medium_fraction",
+    "cloud_s2_edge_density",
+    "cloud_s2_texture_std"
+  ],
+  "world_feature_names": [
+    "world_shortwave_radiation",
+    "world_relative_humidity_2m",
+    "world_dew_point_2m",
+    "world_surface_pressure",
+    "world_pressure_msl",
+    "world_wind_speed_10m",
+    "world_wind_u_10m",
+    "world_wind_v_10m",
+    "world_precipitation",
+    "world_snow_depth",
+    "world_vapour_pressure_deficit"
+  ],
+  "benchmark_inputs": [
+    "current_temperature_c is stored outside model inputs for a concrete persistence benchmark.",
+    "The model must beat current-temperature persistence without receiving current temperature as an input."
+  ],
+  "removed_shortcuts": [
+    "future temperature target leakage",
+    "current temperature model input",
+    "Open-Meteo cloud_cover input",
+    "Open-Meteo cloud_cover_low/mid/high input",
+    "duplicate direct/diffuse/terrestrial radiation inputs",
+    "fake longwave/net-radiation placeholders"
+  ],
+  "image": {
+    "height": 40,
+    "width": 40,
+    "meaning": "single-channel cloud-only image; black=non-cloud, white/probability=cloud"
+  },
+  "locations": [
+    {
+      "name": "sofia_bg",
+      "city": "Sofia",
+      "country": "Bulgaria",
+      "lat": 42.6977,
+      "lon": 23.3219
+    },
+    {
+      "name": "athens_gr",
+      "city": "Athens",
+      "country": "Greece",
+      "lat": 37.9838,
+      "lon": 23.7275
+    },
+    {
+      "name": "london_uk",
+      "city": "London",
+      "country": "United Kingdom",
+      "lat": 51.5074,
+      "lon": -0.1278
+    },
+    {
+      "name": "oslo_no",
+      "city": "Oslo",
+      "country": "Norway",
+      "lat": 59.9139,
+      "lon": 10.7522
+    },
+    {
+      "name": "cairo_eg",
+      "city": "Cairo",
+      "country": "Egypt",
+      "lat": 30.0444,
+      "lon": 31.2357
+    },
+    {
+      "name": "reykjavik_is",
+      "city": "Reykjavik",
+      "country": "Iceland",
+      "lat": 64.1466,
+      "lon": -21.9426
+    },
+    {
+      "name": "lisbon_pt",
+      "city": "Lisbon",
+      "country": "Portugal",
+      "lat": 38.7223,
+      "lon": -9.1393
+    },
+    {
+      "name": "milan_it",
+      "city": "Milan",
+      "country": "Italy",
+      "lat": 45.4642,
+      "lon": 9.19
+    },
+    {
+      "name": "casablanca_ma",
+      "city": "Casablanca",
+      "country": "Morocco",
+      "lat": 33.5731,
+      "lon": -7.5898
+    },
+    {
+      "name": "helsinki_fi",
+      "city": "Helsinki",
+      "country": "Finland",
+      "lat": 60.1699,
+      "lon": 24.9384
+    }
+  ],
+  "date_range": {
+    "start": "2022-01-01",
+    "end": "2026-01-01"
+  },
+  "target_offset_days": 5.0,
+  "splits": {
+    "train": 694,
+    "val": 299,
+    "test": 257
+  }
+}
