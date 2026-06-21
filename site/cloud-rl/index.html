@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ChillOut - Cloud RL Planner Showcase</title>
+  <meta name="description" content="Demonstrate the cloud RL planner contract: image and weather data in, proposed cloud image and action data out." />
+  <meta name="theme-color" content="#081317" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/styles.css?v=12" />
+  <link rel="stylesheet" href="../css/animations.css?v=12" />
+  <link rel="stylesheet" href="../model-lab/model-lab.css?v=12" />
+</head>
+<body class="lab-body">
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="nav" id="nav">
+    <div class="nav__inner">
+      <a class="brand" href="../index.html" aria-label="ChillOut home">
+        <svg class="brand__mark" width="26" height="26" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <path d="M10 18a5.5 5.5 0 0 1 .5-10.97A6.5 6.5 0 0 1 22.5 8.5a5 5 0 0 1-.5 9.98z" stroke="currentColor" stroke-width="1.5"/>
+          <path d="M12 22l-1.4 3M16 22l-1.4 3M20 22l-1.4 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <span class="brand__name">ChillOut</span>
+      </a>
+      <span class="nav__tag">Cloud RL Planner</span>
+      <a href="../model-temperature/index.html" class="btn btn--ghost nav__cta">Temperature Demo</a>
+    </div>
+  </header>
+
+  <main class="lab">
+    <section class="lab__head reveal" data-reveal>
+      <p class="kicker">Second model showcase</p>
+      <h1 class="lab__title">Show the RL planner turning <em>cloud inputs</em> into cloud edits.</h1>
+      <p class="lab__lead">
+        This page demonstrates the planned model boundary: an image mask plus the raw fourteen-feature
+        weather vector goes in, then a generated cloud mask, action tokens, and property-map summaries
+        come back. You can use the generated sample mask or upload a mask-like image.
+      </p>
+    </section>
+
+    <div class="lab__grid">
+      <aside class="lab__stack">
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Planner input</h2>
+              <p>Build or upload the observation image used by the policy.</p>
+            </div>
+            <span class="lab-pill">image + data</span>
+          </div>
+          <form id="plannerForm" class="lab-form">
+            <label>Place
+              <input id="placeInput" type="text" value="Plovdiv, Bulgaria" autocomplete="off" />
+            </label>
+            <div class="lab-form__row">
+              <label>Preset
+                <select id="presetSelect"></select>
+              </label>
+              <label>Date
+                <input id="dateInput" type="date" />
+              </label>
+            </div>
+            <div class="lab-form__row">
+              <label>Target temperature C
+                <input id="targetInput" type="number" step="0.1" value="17.0" />
+              </label>
+              <label>Future RL endpoint
+                <input id="endpointInput" type="url" placeholder="https://api.example.com/plan-clouds" />
+              </label>
+            </div>
+            <label class="lab-file">Optional mask image
+              <input id="imageInput" type="file" accept="image/*" />
+            </label>
+            <p id="status" class="lab-status" role="status"></p>
+            <div class="lab-actions">
+              <button type="button" id="sampleBtn" class="btn btn--ghost">Build sample</button>
+              <button type="submit" id="runBtn" class="btn btn--primary">
+                Run planner
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="lab-card glass">
+          <h2>Raw feature vector</h2>
+          <table class="lab-table" id="featureTable">
+            <tbody></tbody>
+          </table>
+        </section>
+      </aside>
+
+      <section class="lab__stack">
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Before / after cloud masks</h2>
+              <p>The hosted policy will replace the preview renderer later.</p>
+            </div>
+            <span id="modePill" class="lab-pill">waiting</span>
+          </div>
+          <div class="lab-visual">
+            <figure class="lab-frame">
+              <canvas id="originalCanvas" width="256" height="256" aria-label="Original cloud mask"></canvas>
+              <figcaption id="originalCaption">Original mask</figcaption>
+            </figure>
+            <figure class="lab-frame">
+              <img id="generatedImage" alt="Generated cloud mask" />
+              <figcaption id="generatedCaption">Generated mask</figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Planner metrics</h2>
+              <p>Action-level output from the RL policy or preview fallback.</p>
+            </div>
+          </div>
+          <div class="lab-metrics" id="metrics">
+            <div class="lab-metric"><b>-</b><span>Actions emitted</span></div>
+            <div class="lab-metric"><b>-</b><span>Expected temperature</span></div>
+            <div class="lab-metric"><b>-</b><span>Reward proxy</span></div>
+          </div>
+        </section>
+
+        <section class="lab-card glass">
+          <div class="lab-card__head">
+            <div>
+              <h2>Input and output JSON</h2>
+              <p>Matches the policy interface documented in <code>cloud_rl/README.md</code>.</p>
+            </div>
+          </div>
+          <pre id="payloadJson" class="lab-json">{}</pre>
+          <p class="lab-note">The endpoint-ready payload includes <code>original_mask_data_url</code>, <code>feature_vector</code>, <code>raw_features</code>, and <code>target_temperature_c</code>. The preview omits long image data in this JSON block for readability.</p>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <script src="../js/reveal.js?v=12" defer></script>
+  <script src="../model-lab/model-contracts.js?v=12"></script>
+  <script src="cloud-rl.js?v=12"></script>
+</body>
+</html>
