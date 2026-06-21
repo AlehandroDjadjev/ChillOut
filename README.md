@@ -43,7 +43,8 @@ Optional values:
 Backend RL runner fallback:
 
 - `OPENAI_API_KEY`: set this on the deployed backend/API function, not in browser JavaScript. It is used only when the RL inference runner is submitted without an uploaded `.pt` checkpoint.
-- `OPENAI_IMAGE_MODEL`: optional, defaults to `gpt-image-1`.
+- `OPENAI_IMAGE_MODEL`: optional, defaults to `gpt-image-1.5`.
+- `OPENAI_IMAGE_QUALITY`: optional, defaults to `high`.
 - `OPENAI_IMAGE_SIZE`: optional, defaults to `1024x1024`.
 
 ## Security Note
