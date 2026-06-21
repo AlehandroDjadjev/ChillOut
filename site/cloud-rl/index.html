@@ -38,7 +38,8 @@
       <p class="lab__lead">
         This page demonstrates the planned model boundary: an image mask plus the raw fourteen-feature
         weather vector goes in, then a generated cloud mask, action tokens, and property-map summaries
-        come back. You can use the generated sample mask or upload a mask-like image.
+        come back. The original mask is fetched as a live Sentinel-2 cloud mask for the chosen place and
+        date (falling back to a preview render when no scene is available), or you can upload your own.
       </p>
     </section>
 
@@ -99,7 +100,7 @@
           <div class="lab-card__head">
             <div>
               <h2>Before / after cloud masks</h2>
-              <p>The hosted policy will replace the preview renderer later.</p>
+              <p>Original is a live Sentinel-2 cloud mask; the hosted policy will produce the generated side.</p>
             </div>
             <span id="modePill" class="lab-pill">waiting</span>
           </div>
@@ -144,7 +145,7 @@
   </main>
 
   <script src="../js/reveal.js?v=12" defer></script>
-  <script src="../model-lab/model-contracts.js?v=12"></script>
-  <script src="cloud-rl.js?v=12"></script>
+  <script src="../model-lab/model-contracts.js?v=13"></script>
+  <script src="cloud-rl.js?v=13"></script>
 </body>
 </html>

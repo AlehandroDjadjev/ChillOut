@@ -66,18 +66,28 @@
     try {
       var place = await resolvePlace();
       sample = await C.fetchWeatherSample(place, el.date.value);
-      if (!uploadedMaskDataUrl) {
-        originalMaskDataUrl = C.drawMask(el.originalCanvas, sample);
-      } else {
+      var maskSource = "generated mask";
+      if (uploadedMaskDataUrl) {
         originalMaskDataUrl = await C.loadImageToCanvas(uploadedMaskDataUrl, el.originalCanvas);
+        maskSource = "uploaded mask";
+      } else {
+        try {
+          if (!silent) setStatus("Fetching the latest Sentinel-2 scene for " + sample.date + "...");
+          var sentinelUrl = await C.fetchSentinelImage(sample, "cloud_mask");
+          originalMaskDataUrl = await C.loadImageToCanvas(sentinelUrl, el.originalCanvas);
+          maskSource = "Sentinel-2 cloud mask";
+        } catch (sentinelError) {
+          originalMaskDataUrl = C.drawMask(el.originalCanvas, sample);
+          maskSource = "preview mask (Sentinel-2 unavailable: " + (sentinelError.message || sentinelError) + ")";
+        }
       }
       el.target.value = Number.isFinite(Number(el.target.value))
         ? el.target.value
         : C.round(sample.observed_temperature_c - 2, 1);
-      el.originalCaption.textContent = sample.sample_id + (uploadedMaskDataUrl ? " - uploaded mask" : " - generated mask");
+      el.originalCaption.textContent = sample.sample_id + " - " + maskSource;
       renderFeatureTable();
       renderPayload();
-      setStatus("Planner input ready: " + sample.sample_id, "ok");
+      setStatus("Planner input ready: " + sample.sample_id + " (" + maskSource + ")", "ok");
     } catch (error) {
       setStatus(error.message || String(error), "error");
     } finally {

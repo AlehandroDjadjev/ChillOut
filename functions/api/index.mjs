@@ -9,6 +9,7 @@
  */
 import { validateScenario, STATUSES } from './lib/schema.mjs';
 import { ensureSchema, createSimulationRow, getSimulationRow, listSimulationRows } from './lib/db.mjs';
+import { fetchSentinel2Png } from './lib/sentinel2.mjs';
 
 const headers = {
   'Content-Type': 'application/json',
@@ -84,11 +85,22 @@ export const handler = async (event) => {
         return json(200, { simulations: rows });
       }
 
+      case 'sentinel2': {
+        const image_data_url = await fetchSentinel2Png({
+          bbox: body.bbox,
+          date: body.date,
+          mode: body.mode,
+          width: body.width,
+          height: body.height,
+        });
+        return json(200, { image_data_url, mode: body.mode || 'cloud_mask', date: body.date });
+      }
+
       default:
         return json(400, {
           error: 'Unknown action',
           available: ['hello', 'status', 'migrate', 'createSimulation', 'validateScenario',
-            'getSimulation', 'getStatus', 'getResults', 'listSimulations'],
+            'getSimulation', 'getStatus', 'getResults', 'listSimulations', 'sentinel2'],
           statuses: STATUSES,
         });
     }

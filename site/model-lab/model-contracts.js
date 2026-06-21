@@ -30,6 +30,8 @@
     { name: "Madrid", country: "Spain", lat: 40.4168, lon: -3.7038 }
   ];
 
+  var DEFAULT_API_BASE = "https://7mfql7bgxtukoux34v3g26nbie0axyyc.lambda-url.eu-central-1.on.aws/";
+
   function getConfig() {
     var globalConfig = window.ChillOutModelConfig || {};
     return {
@@ -40,7 +42,11 @@
       plannerEndpoint:
         globalConfig.plannerEndpoint ||
         localStorage.getItem("chillout.plannerEndpoint") ||
-        ""
+        "",
+      apiBase:
+        globalConfig.apiBase ||
+        localStorage.getItem("chillout.apiBase") ||
+        DEFAULT_API_BASE
     };
   }
 
@@ -263,6 +269,21 @@
     return canvas.toDataURL("image/png");
   }
 
+  async function fetchSentinelImage(sample, mode) {
+    var apiBase = getConfig().apiBase;
+    if (!apiBase) throw new Error("No API base configured for Sentinel-2 fetch.");
+    var result = await postJson(apiBase, {
+      action: "sentinel2",
+      bbox: sample.bbox,
+      date: sample.date,
+      mode: mode || "cloud_mask"
+    });
+    if (!result || !result.image_data_url) {
+      throw new Error((result && (result.error || result.message)) || "Sentinel-2 fetch returned no image.");
+    }
+    return result.image_data_url;
+  }
+
   async function postJson(url, body) {
     var response = await fetch(url, {
       method: "POST",
@@ -438,6 +459,7 @@
     escapeHtml: escapeHtml,
     geocodePlace: geocodePlace,
     fetchWeatherSample: fetchWeatherSample,
+    fetchSentinelImage: fetchSentinelImage,
     drawMask: drawMask,
     runTemperatureModel: runTemperatureModel,
     runPlannerModel: runPlannerModel,

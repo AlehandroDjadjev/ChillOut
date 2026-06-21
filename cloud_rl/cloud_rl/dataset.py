@@ -330,23 +330,9 @@ class CloudFolderDataset(Dataset):
             stats = json.loads((self.data_root / "stats.json").read_text(encoding="utf-8"))
 
         if stats is None:
-            feature_rows = []
-            targets = []
-            for sample, _source in self.samples:
-                x = extract_feature_vector(sample, self.feature_keys)
-                x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-                if np.isfinite(x).all():
-                    feature_rows.append(x)
-                targets.append(float(sample.get("target_temperature_c", sample.get("target", 20.0))))
-            if feature_rows:
-                mat = np.stack(feature_rows).astype(np.float32)
-                self.feature_mean = mat.mean(axis=0)
-                self.feature_std = mat.std(axis=0)
-            else:
-                self.feature_mean, self.feature_std = default_stats_for_keys(self.feature_keys)
-            t = np.asarray(targets, dtype=np.float32)
-            self.target_mean = float(t.mean()) if len(t) else 20.0
-            self.target_std = float(max(t.std(), 1.0)) if len(t) else 10.0
+            self.feature_mean, self.feature_std = default_stats_for_keys(self.feature_keys)
+            self.target_mean = 20.0
+            self.target_std = 10.0
         else:
             stats_feature_keys = list(stats.get("feature_keys") or self.feature_keys)
             if stats_feature_keys != self.feature_keys:
@@ -361,21 +347,11 @@ class CloudFolderDataset(Dataset):
 
         self.feature_std = np.where(self.feature_std < 1e-6, 1.0, self.feature_std)
         self.target_std = max(self.target_std, 1e-6)
-<<<<<<< HEAD
-<<<<<<< HEAD
-        self.feature_dim = len(self.feature_keys)
-=======
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         # Policy state includes the latest normalized raw feature vector plus the
         # v6 trend sequence, current-temp anchor, and target offset. The reward
         # still receives raw feature tensors separately.
         self.policy_feature_dim = len(self.feature_keys) + self.lookback * 4 + 2
         self.feature_dim = self.policy_feature_dim
-<<<<<<< HEAD
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
     def __len__(self) -> int:
         return len(self.windows)
@@ -392,28 +368,14 @@ class CloudFolderDataset(Dataset):
             raw = np.nan_to_num(raw, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
             raw_sequence.append(raw)
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-        raw_features = extract_feature_vector(sample, self.feature_keys)
-        raw_features = np.nan_to_num(raw_features, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-        norm_features = (raw_features - self.feature_mean) / self.feature_std
-=======
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
         raw_features = raw_sequence[-1]
         raw_feature_sequence = np.stack(raw_sequence, axis=0).astype(np.float32)
         norm_sequence = (raw_feature_sequence - self.feature_mean) / self.feature_std
-        norm_sequence = np.nan_to_num(norm_sequence, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-        norm_sequence = np.clip(norm_sequence, -8.0, 8.0)
         norm_features = norm_sequence[-1]
         trend = build_trend_features([row for row, _ in window])
         if trend.shape[0] != self.lookback:
             pad = np.repeat(trend[:1], self.lookback - trend.shape[0], axis=0)
             trend = np.concatenate([pad, trend], axis=0)
-<<<<<<< HEAD
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
-=======
->>>>>>> 7121b02f0e3503fc5d02214fb2f226d64c554238
 
         target = float(sample.get("target_temperature_c", sample.get("target", 20.0)))
         current = current_temperature_c(sample)
@@ -421,8 +383,6 @@ class CloudFolderDataset(Dataset):
         current_norm = np.asarray([(current - self.target_mean) / self.target_std], dtype=np.float32)
         offset_norm = np.asarray([target_offset_days(sample) / 10.0], dtype=np.float32)
         policy_features = np.concatenate([norm_features, trend.reshape(-1), current_norm, offset_norm]).astype(np.float32)
-        policy_features = np.nan_to_num(policy_features, nan=0.0, posinf=0.0, neginf=0.0)
-        policy_features = np.clip(policy_features, -8.0, 8.0).astype(np.float32)
 
         h, w = self.image_size
         mask_sequence = torch.stack(masks, dim=0).float()
