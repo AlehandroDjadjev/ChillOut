@@ -95,7 +95,17 @@ function evaluatePixel(sample) {
 }`;
 }
 
-function buildProcessRequest({ bbox, date, mode, width, height }) {
+function shiftIsoDate(date, days) {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function buildProcessRequest({ bbox, date, mode, width, height, lookbackDays = 12, lookaheadDays = 3 }) {
+  // Sentinel-2 revisits every ~5 days, so a single day usually has no acquisition.
+  // Query a window around the requested date and take the most recent scene in it.
+  const from = `${shiftIsoDate(date, -lookbackDays)}T00:00:00Z`;
+  const to = `${shiftIsoDate(date, lookaheadDays)}T23:59:59Z`;
   return {
     input: {
       bounds: { bbox },
@@ -103,8 +113,8 @@ function buildProcessRequest({ bbox, date, mode, width, height }) {
         {
           type: 'sentinel-2-l2a',
           dataFilter: {
-            timeRange: { from: `${date}T00:00:00Z`, to: `${date}T23:59:59Z` },
-            mosaickingOrder: 'leastCC',
+            timeRange: { from, to },
+            mosaickingOrder: 'mostRecent',
           },
           processing: { upsampling: 'NEAREST', downsampling: 'NEAREST' },
         },
