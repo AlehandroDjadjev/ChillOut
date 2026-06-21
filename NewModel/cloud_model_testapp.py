@@ -520,7 +520,7 @@ def create_app(engine: CloudTemplateInference) -> FastAPI:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", default="dataset_cloudforce_radiation_v6_big_clean")
-    parser.add_argument("--selector-checkpoint", default="runs/cloud_template_selector_v13/best_selector.pt")
+    parser.add_argument("--selector-checkpoint", default="cloud_template_selector_v13/best_selector.pt")
     parser.add_argument("--reward-checkpoint", default="runs/cloud_radiation_v8_clean_direct1/best.pt")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)

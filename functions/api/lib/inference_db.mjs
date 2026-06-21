@@ -17,10 +17,11 @@ export async function ensureInferenceSchema() {
     CREATE TABLE IF NOT EXISTS inference_jobs (
       id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       status        text NOT NULL DEFAULT 'queued',
-      checkpoint_key text NOT NULL,
+      checkpoint_key text,
       stats_key     text,
       mask_data_url text NOT NULL,
       raw_features  jsonb NOT NULL,
+      sample        jsonb,
       target_temp   double precision,
       place         text,
       date          text,
@@ -31,6 +32,8 @@ export async function ensureInferenceSchema() {
     );
     CREATE INDEX IF NOT EXISTS inference_jobs_status_created_idx
       ON inference_jobs (status, created_at);
+    ALTER TABLE inference_jobs ALTER COLUMN checkpoint_key DROP NOT NULL;
+    ALTER TABLE inference_jobs ADD COLUMN IF NOT EXISTS sample jsonb;
   `);
   inferenceSchemaReady = true;
 }
@@ -40,6 +43,7 @@ export async function createInferenceJob({
   stats_key,
   mask_data_url,
   raw_features,
+  sample,
   target_temp,
   place,
   date,
@@ -47,14 +51,15 @@ export async function createInferenceJob({
   const db = getPool();
   const { rows } = await db.query(
     `INSERT INTO inference_jobs
-       (status, checkpoint_key, stats_key, mask_data_url, raw_features, target_temp, place, date)
-     VALUES ('queued', $1, $2, $3, $4, $5, $6, $7)
+       (status, checkpoint_key, stats_key, mask_data_url, raw_features, sample, target_temp, place, date)
+     VALUES ('queued', $1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id, status, created_at`,
     [
-      checkpoint_key,
+      checkpoint_key || null,
       stats_key || null,
       mask_data_url,
       JSON.stringify(raw_features),
+      sample ? JSON.stringify(sample) : null,
       Number.isFinite(Number(target_temp)) ? Number(target_temp) : null,
       place || null,
       date || null,

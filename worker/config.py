@@ -6,9 +6,8 @@ import os
 # Job queue (same Postgres the Lambda writes to; DATABASE_URL injected by OpenKBS).
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
-# CDN base for pulling uploaded RL checkpoints. Objects under the `media/` prefix are served
-# publicly through CloudFront, so the RL worker fetches checkpoints over HTTPS (the
-# `openkbs storage download` CLI path is unreliable on this runtime). Override per-deploy.
+# CDN base used by older storage-backed worker actions. Cloud model inference now loads model
+# checkpoints from local disk via CLOUD_SELECTOR_CHECKPOINT and CLOUD_REWARD_CHECKPOINT.
 STORAGE_CDN_BASE = os.environ.get(
     "STORAGE_CDN_BASE", "https://d31rm64rx9q92u.cloudfront.net"
 ).rstrip("/")

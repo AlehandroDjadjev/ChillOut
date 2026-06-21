@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ChillOut - RL Inference Runner</title>
-  <meta name="description" content="Run uploaded RL weights on a live Sentinel-2 cloud mask, or use the AI fallback overlay when no checkpoint is available." />
+  <meta name="description" content="Run the local cloud model test app inference stack on a live Sentinel-2 cloud mask." />
   <meta name="theme-color" content="#081317" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -34,9 +34,9 @@
   <main class="lab">
     <section class="lab__head reveal" data-reveal>
       <p class="kicker">Live model runner</p>
-      <h1 class="lab__title">Run <em>real RL weights</em> or use an AI fallback on a live cloud mask.</h1>
+      <h1 class="lab__title">Run the <em>cloud model test app</em> on a live cloud mask.</h1>
       <p class="lab__lead">
-        Pick a place and date, upload a trained checkpoint (<code>.pt</code>) and optionally its <code>stats.json</code>, then hit Run. The checkpoint is uploaded straight to storage, the latest Sentinel-2 cloud mask is fetched for your area, and a backend worker loads the weights and runs the policy on a VM. If no checkpoint is uploaded, the backend asks OpenAI to produce an intervention overlay from the mask and target temperature: red removes clouds, green adds clouds, and yellow modifies clouds.
+        Pick a place, date, and target temperature. The page fetches the Sentinel-2 mask plus same-date weather/radiation inputs, then queues the local model-test-app inference worker. The worker loads the model weights from disk and returns the generated mask, template choice, and radiation verification metrics.
       </p>
     </section>
 
@@ -46,9 +46,9 @@
           <div class="lab-card__head">
             <div>
               <h2>Inference input</h2>
-              <p>Choose the location and target. Weights are optional when using the AI fallback.</p>
+              <p>Choose the location and target. The worker uses the model weights installed on the backend.</p>
             </div>
-            <span class="lab-pill">checkpoint + data</span>
+            <span class="lab-pill">model app</span>
           </div>
           <form id="inferForm" class="lab-form">
             <label>Place
@@ -64,12 +64,6 @@
             </div>
             <label>Target temperature C
               <input id="targetInput" type="number" step="0.1" value="17.0" />
-            </label>
-            <label class="lab-file">Checkpoint (.pt) - optional; omit for AI fallback
-              <input id="checkpointInput" type="file" accept=".pt,.pth,.ckpt,application/octet-stream" />
-            </label>
-            <label class="lab-file">Normalization stats (stats.json) - recommended with checkpoint
-              <input id="statsInput" type="file" accept=".json,application/json" />
             </label>
             <p id="status" class="lab-status" role="status"></p>
             <div class="lab-actions">
@@ -95,7 +89,7 @@
           <div class="lab-card__head">
             <div>
               <h2>Before / after cloud masks</h2>
-              <p>Original is the live Sentinel-2 mask; generated comes from the uploaded policy or AI fallback.</p>
+              <p>Original is the live Sentinel-2 mask; generated comes from the local cloud model test app inference worker.</p>
             </div>
             <span id="modePill" class="lab-pill">waiting</span>
           </div>
@@ -131,7 +125,7 @@
           <div class="lab-metrics" id="metrics">
             <div class="lab-metric"><b>-</b><span>Actions emitted</span></div>
             <div class="lab-metric"><b>-</b><span>Target temperature</span></div>
-            <div class="lab-metric"><b>-</b><span>Normalization</span></div>
+            <div class="lab-metric"><b>-</b><span>Mode</span></div>
           </div>
           <pre id="actionsJson" class="lab-json">[]</pre>
         </section>
@@ -151,6 +145,6 @@
 
   <script src="../js/reveal.js?v=13" defer></script>
   <script src="../model-lab/model-contracts.js?v=15"></script>
-  <script src="rl-inference.js?v=2"></script>
+  <script src="rl-inference.js?v=3"></script>
 </body>
 </html>

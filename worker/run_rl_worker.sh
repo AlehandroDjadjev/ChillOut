@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# One-command launch for the ChillOut RL inference worker daemon.
+# One-command launch for the ChillOut cloud model inference worker daemon.
 #
-# Runs the uploaded RL policy on a single Sentinel-2 mask (the Lambda can't run PyTorch).
+# Runs NewModel/cloud_model_testapp_inference.py on a single live Sentinel-2 mask.
 # Uses the cloud_rl CPU venv (torch already installed there) and ensures psycopg2 is present
 # for the job queue. Pulls DATABASE_URL from the OpenKBS project (same Postgres the Lambda
 # writes to) and execs the polling daemon.
@@ -12,7 +12,7 @@ REPO_ROOT="$(cd "$HERE/.." && pwd)"
 VENV_PY="${VENV_PY:-$REPO_ROOT/cloud_rl/.venv/bin/python}"
 
 if [[ ! -x "$VENV_PY" ]]; then
-  echo "error: python venv not found at $VENV_PY (expected the cloud_rl torch venv)" >&2
+  echo "error: python venv not found at $VENV_PY (expected a torch venv)" >&2
   exit 1
 fi
 

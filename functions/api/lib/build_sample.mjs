@@ -2,7 +2,8 @@
  * Single city + date sample builder — the server-side equivalent of one (city, date) row from
  * build_temperature_dataset.py. Connects the real satellite scientific features (Copernicus
  * Statistics API) with the real weather features (Open-Meteo archive, forecast fallback) into the
- * 14-feature contract the RL/temperature models expect.
+ * 14-feature contract the legacy RL/temperature models expect, plus the cloudforce/radiation
+ * world fields used by the local cloud model test app inference worker.
  *
  * The Sentinel-2 cloud mask itself is fetched separately by the browser via the `sentinel2` action.
  */
@@ -62,6 +63,39 @@ function circularMeanDegrees(values) {
   return (deg + 360) % 360;
 }
 
+function windUv(speedMs, directionDeg) {
+  const speed = Number(speedMs);
+  const direction = Number(directionDeg);
+  if (!Number.isFinite(speed) || !Number.isFinite(direction)) return [0, 0];
+  const rad = (direction * Math.PI) / 180;
+  return [-speed * Math.sin(rad), -speed * Math.cos(rad)];
+}
+
+function buildCloudforceWorldInputs(weather) {
+  const speed = Number.isFinite(Number(weather.wind_speed_10m_hourly_mean))
+    ? Number(weather.wind_speed_10m_hourly_mean)
+    : Number(weather.wind_speed_10m_mean || 0);
+  const direction = Number.isFinite(Number(weather.wind_direction_10m_hourly_dominant))
+    ? Number(weather.wind_direction_10m_hourly_dominant)
+    : Number(weather.wind_direction_10m_dominant || 0);
+  const [u, v] = windUv(speed, direction);
+  return {
+    world_shortwave_radiation: Number(weather.shortwave_radiation_mean || 0),
+    world_relative_humidity_2m: Number(weather.relative_humidity_2m_mean || 0) / 100,
+    world_dew_point_2m: Number(weather.dew_point_2m_mean || 0),
+    world_surface_pressure: Number(weather.surface_pressure_mean || 0) * 100,
+    world_pressure_msl: Number(weather.pressure_msl_mean || weather.surface_pressure_mean || 0) * 100,
+    world_wind_speed_10m: speed,
+    world_wind_u_10m: u,
+    world_wind_v_10m: v,
+    world_precipitation: Number.isFinite(Number(weather.precipitation_hourly_sum))
+      ? Number(weather.precipitation_hourly_sum)
+      : Number(weather.precipitation_sum || 0),
+    world_snow_depth: Number(weather.snow_depth_mean || 0),
+    world_vapour_pressure_deficit: Number(weather.vapour_pressure_deficit_mean || 0),
+  };
+}
+
 // Pull one day's weather aggregate from an Open-Meteo response (archive or forecast share schema).
 function aggregateWeather(payload, date) {
   const daily = payload.daily || {};
@@ -95,6 +129,15 @@ function aggregateWeather(payload, date) {
       precipitation_sum: dailyAt('precipitation_sum'),
       cloud_cover_mean: mean(hourlyPick('cloud_cover')),
       surface_pressure_mean: mean(hourlyPick('surface_pressure')),
+      pressure_msl_mean: mean(hourlyPick('pressure_msl')),
+      shortwave_radiation_mean: mean(hourlyPick('shortwave_radiation')),
+      relative_humidity_2m_mean: mean(hourlyPick('relative_humidity_2m')),
+      dew_point_2m_mean: mean(hourlyPick('dew_point_2m')),
+      wind_speed_10m_hourly_mean: mean(hourlyPick('wind_speed_10m')),
+      wind_direction_10m_hourly_dominant: circularMeanDegrees(hourlyPick('wind_direction_10m')),
+      precipitation_hourly_sum: hourlyPick('precipitation').filter(Number.isFinite).reduce((s, x) => s + x, 0),
+      snow_depth_mean: mean(hourlyPick('snow_depth')),
+      vapour_pressure_deficit_mean: mean(hourlyPick('vapour_pressure_deficit')),
     },
   };
 }
@@ -106,7 +149,19 @@ const DAILY_FIELDS = [
   'wind_speed_10m_mean',
   'wind_direction_10m_dominant',
 ].join(',');
-const HOURLY_FIELDS = ['cloud_cover', 'surface_pressure'].join(',');
+const HOURLY_FIELDS = [
+  'cloud_cover',
+  'surface_pressure',
+  'pressure_msl',
+  'shortwave_radiation',
+  'relative_humidity_2m',
+  'dew_point_2m',
+  'wind_speed_10m',
+  'wind_direction_10m',
+  'precipitation',
+  'snow_depth',
+  'vapour_pressure_deficit',
+].join(',');
 
 async function fetchWeather(lat, lon, date) {
   // Archive matches the training pipeline exactly, but lags ~5 days. Try it first.
@@ -185,6 +240,7 @@ export async function buildSample({ place, lat, lon, date, bbox, windowDays = 7 
   inputs.surface_pressure_mean = w.surface_pressure_mean === null ? null : round(w.surface_pressure_mean, 2);
 
   const feature_vector = FEATURE_NAMES.map((name) => inputs[name]);
+  const cloudforce_world_inputs = buildCloudforceWorldInputs(w);
 
   return {
     sample_id: `${slug(place || 'place')}_${date}`,
@@ -196,8 +252,10 @@ export async function buildSample({ place, lat, lon, date, bbox, windowDays = 7 
     anchor: `${date}T00:00:00Z`,
     mask_path: 'sentinel2_cloud_mask.png',
     observed_temperature_c: round(weather.observed_temperature_c, 2),
+    current_temperature_c: round(weather.observed_temperature_c, 2),
     target_temperature_c: null,
     inputs,
+    cloudforce_world_inputs,
     feature_vector,
     source_notes: {
       satellite_stats:

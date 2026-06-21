@@ -65,14 +65,14 @@ def connect():
 
 def claim_next_job():
     """Atomically pick the oldest queued job and flip it to 'running'. Returns the row dict
-    (id, checkpoint_key, stats_key, mask_data_url, raw_features, target_temp, place, date),
+    (id, checkpoint_key, stats_key, mask_data_url, raw_features, sample, target_temp, place, date),
     or None if the queue is empty."""
     def op(conn):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
                 SELECT id, checkpoint_key, stats_key, mask_data_url,
-                       raw_features, target_temp, place, date
+                       raw_features, sample, target_temp, place, date
                   FROM inference_jobs
                  WHERE status = 'queued'
                  ORDER BY created_at ASC

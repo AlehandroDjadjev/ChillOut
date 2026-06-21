@@ -1,197 +1,150 @@
 #!/usr/bin/env python3
-"""ChillOut RL inference worker daemon.
+"""ChillOut cloud model inference worker daemon.
 
-Polls the shared Postgres `inference_jobs` queue for jobs enqueued by the Lambda API, then
-runs the uploaded RL policy on a single Sentinel-2 cloud mask on this machine (the Lambda
-cannot run PyTorch):
+Polls the shared Postgres `inference_jobs` queue for jobs enqueued by the site, then runs the
+local NewModel cloud template inference stack on this machine. The browser no longer uploads a
+checkpoint and the API no longer calls any AI image fallback; the worker loads the model-test-app
+weights from fixed paths on disk.
 
-    claim job -> download checkpoint (+ stats.json) from S3 -> build one-sample batch
-              -> CloudActorCritic.deterministic -> rasterize_actions
-              -> encode masks to base64 PNG -> store result
-
-Mirrors worker/run_simulation.py in shape (claim/process/mark loop, fail honestly, stay alive).
-
-Run:  bash worker/run_rl_worker.sh   (or DATABASE_URL=... python3 worker/rl_inference_worker.py)
+Run:  bash worker/run_rl_worker.sh   (or DATABASE_URL=... python worker/rl_inference_worker.py)
 """
-import base64
-import io
+from __future__ import annotations
+
 import os
 import sys
-import tempfile
 import time
 import traceback
-import urllib.error
-import urllib.request
-
-import numpy as np
-import torch
-from PIL import Image
 
 import config
 import rl_db
 
-# Make the cloud_rl package importable (repo_root/cloud_rl contains the `cloud_rl` package).
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLOUD_RL_DIR = os.path.join(REPO_ROOT, "cloud_rl")
-if CLOUD_RL_DIR not in sys.path:
-    sys.path.insert(0, CLOUD_RL_DIR)
+NEW_MODEL_DIR = os.path.join(REPO_ROOT, "NewModel")
+if NEW_MODEL_DIR not in sys.path:
+    sys.path.insert(0, NEW_MODEL_DIR)
 
-import json  # noqa: E402  (stdlib, kept near the cloud_rl imports for clarity)
+from cloud_model_testapp_inference import CloudTemplateInference, InferenceConfig  # noqa: E402
 
-from cloud_rl.actions import actions_to_jsonable, rasterize_actions  # noqa: E402
-from cloud_rl.dataset import (  # noqa: E402
-    FEATURE_KEYS,
-    assemble_obs_map,
-    build_single_policy_features,
-    default_stats_for_keys,
-)
-from cloud_rl.models import CloudActorCritic  # noqa: E402
-
-DEVICE = torch.device("cpu")
-IMAGE_SIZE = (256, 256)
+_ENGINE = None
 
 
-def log(msg):
-    print(f"[rl-worker] {msg}", flush=True)
+def log(msg: str) -> None:
+    print(f"[cloud-model-worker] {msg}", flush=True)
 
 
-def storage_download(key, dest):
-    """Pull an uploaded object over HTTPS from the public CDN. Objects live under the `media/`
-    prefix and are served by CloudFront, so a plain GET works (the random job UUID in the key
-    keeps them unguessable). Uploaded by the Lambda's presigned PUT, fetched here."""
-    url = f"{config.STORAGE_CDN_BASE}/{key.lstrip('/')}"
-    with urllib.request.urlopen(url, timeout=120) as resp:
-        if resp.status != 200:
-            raise RuntimeError(f"download {key} failed: HTTP {resp.status}")
-        ctype = (resp.headers.get("Content-Type") or "").lower()
-        data = resp.read()
-    # CloudFront serves an HTML catch-all (200) for keys that don't exist, which would later
-    # blow up torch.load with a cryptic pickle error. Fail honestly instead.
-    if "text/html" in ctype:
-        raise RuntimeError(f"object not found at {key} (CDN returned an HTML page)")
-    with open(dest, "wb") as fh:
-        fh.write(data)
+def _path_from_env(name: str, default_relative: str) -> str:
+    raw = os.environ.get(name)
+    if raw:
+        return raw
+    return os.path.join(NEW_MODEL_DIR, default_relative)
 
 
-def decode_mask_data_url(data_url):
-    b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
-    raw = base64.b64decode(b64)
-    h, w = IMAGE_SIZE
-    img = Image.open(io.BytesIO(raw)).convert("L").resize((w, h), resample=Image.Resampling.BILINEAR)
-    arr = np.asarray(img, dtype=np.float32) / 255.0
-    arr = (arr >= 0.5).astype(np.float32)
-    return torch.from_numpy(arr)[None, :, :]
+def get_engine() -> CloudTemplateInference:
+    global _ENGINE
+    if _ENGINE is not None:
+        return _ENGINE
 
+    data_root = _path_from_env("CLOUD_MODEL_DATA_ROOT", "dataset_cloudforce_radiation_v6_big_clean")
+    selector_checkpoint = _path_from_env("CLOUD_SELECTOR_CHECKPOINT", "cloud_template_selector_v13/best_selector.pt")
+    reward_checkpoint = _path_from_env("CLOUD_REWARD_CHECKPOINT", "runs/cloud_radiation_v8_clean_direct1/best.pt")
+    missing = [p for p in (selector_checkpoint, reward_checkpoint) if not os.path.exists(p)]
+    if missing:
+        raise FileNotFoundError(
+            "Cloud model checkpoint(s) missing: "
+            + ", ".join(missing)
+            + ". Add the weights or set CLOUD_SELECTOR_CHECKPOINT/CLOUD_REWARD_CHECKPOINT."
+        )
 
-def tensor_to_data_url(t):
-    arr = t.detach().cpu().numpy()
-    arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
-    buf = io.BytesIO()
-    Image.fromarray(arr).save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def load_stats(stats_path):
-    """Return (feature_mean, feature_std, target_mean, target_std). Falls back to the
-    dataset defaults if no stats.json was uploaded."""
-    if stats_path and os.path.exists(stats_path):
-        stats = json.loads(open(stats_path, "r", encoding="utf-8").read())
-        feature_mean = np.asarray(stats["feature_mean"], dtype=np.float32)
-        feature_std = np.asarray(stats["feature_std"], dtype=np.float32)
-        target_mean = float(stats["target_temp_mean"][0])
-        target_std = float(stats["target_temp_std"][0])
-    else:
-        feature_mean, feature_std = default_stats_for_keys(FEATURE_KEYS)
-        target_mean, target_std = 20.0, 10.0
-    feature_std = np.where(feature_std < 1e-6, 1.0, feature_std)
-    target_std = max(target_std, 1e-6)
-    return feature_mean, feature_std, target_mean, target_std
+    log(
+        "loading cloud model test app inference "
+        f"selector={selector_checkpoint} reward={reward_checkpoint} data_root={data_root}"
+    )
+    _ENGINE = CloudTemplateInference(
+        InferenceConfig(
+            data_root=data_root,
+            selector_checkpoint=selector_checkpoint,
+            reward_checkpoint=reward_checkpoint,
+            split=os.environ.get("CLOUD_MODEL_SPLIT", "val"),
+            force_cpu=os.environ.get("CLOUD_MODEL_FORCE_CPU", "").lower() in {"1", "true", "yes"},
+            load_dataset=False,
+        )
+    )
+    return _ENGINE
 
 
 def process_job(job):
     job_id = job["id"]
-    log(f"claimed job {job_id} (checkpoint={job['checkpoint_key']})")
+    sample = job.get("sample")
+    if not isinstance(sample, dict):
+        raise ValueError("inference job is missing the same-date sample payload")
+    if not job.get("mask_data_url"):
+        raise ValueError("inference job is missing mask_data_url")
 
-    raw_features = np.asarray(job["raw_features"], dtype=np.float32)
-    if raw_features.shape[0] != len(FEATURE_KEYS):
-        raise ValueError(f"raw_features must have {len(FEATURE_KEYS)} values, got {raw_features.shape[0]}")
-    target_c = float(job["target_temp"]) if job["target_temp"] is not None else 20.0
+    target_c = float(job["target_temp"]) if job["target_temp"] is not None else float(
+        sample.get("target_temperature_c") or sample.get("observed_temperature_c") or 20.0
+    )
+    sample["target_temperature_c"] = target_c
+    log(f"claimed job {job_id} sample={sample.get('sample_id', job.get('place'))} target={target_c:.2f}C")
 
-    with tempfile.TemporaryDirectory(prefix=f"rlinfer_{job_id}_") as tmp:
-        # 1. Pull the weights (and stats if provided).
-        ckpt_path = os.path.join(tmp, "checkpoint.pt")
-        storage_download(job["checkpoint_key"], ckpt_path)
-        stats_path = None
-        if job.get("stats_key"):
-            stats_path = os.path.join(tmp, "stats.json")
-            storage_download(job["stats_key"], stats_path)
+    engine = get_engine()
+    result = engine.generate_live(
+        sample=sample,
+        mask_data_url=job["mask_data_url"],
+        target_temperature_c=target_c,
+        wm2_per_c=float(os.environ.get("CLOUD_MODEL_WM2_PER_C", "80")),
+        input_mode=os.environ.get("CLOUD_MODEL_INPUT_MODE", "full"),
+        run_oracle=os.environ.get("CLOUD_MODEL_RUN_ORACLE", "1").lower() not in {"0", "false", "no"},
+        oracle_batch_size=int(os.environ.get("CLOUD_MODEL_ORACLE_BATCH_SIZE", "32")),
+        penalty_l1=float(os.environ.get("CLOUD_MODEL_PENALTY_L1", "25")),
+        penalty_coverage=float(os.environ.get("CLOUD_MODEL_PENALTY_COVERAGE", "80")),
+        seed=int(os.environ.get("CLOUD_MODEL_SEED", "123")),
+    )
 
-        # 2. Load checkpoint + its training config. weights_only=False because real training
-        # checkpoints carry a cfg dict / numpy scalars / argparse Namespaces that the torch>=2.6
-        # safe-unpickler rejects; the user uploaded these weights, so we trust them (same
-        # semantics as cloud_rl/evaluate.py's plain torch.load).
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        cfg = ckpt.get("cfg") or {}
-        lookback = int(cfg.get("lookback", 4))
-        policy_cfg = cfg.get("policy", {})
-        max_actions = int(policy_cfg.get("max_actions", 6))
-        hidden_dim = int(policy_cfg.get("hidden_dim", 128))
-
-        # 3. Build the single-sample inputs exactly as the dataset would (shared helpers).
-        feature_mean, feature_std, target_mean, target_std = load_stats(stats_path)
-        policy_features, target_norm = build_single_policy_features(
-            raw_features, feature_mean, feature_std, target_mean, target_std,
-            target_c=target_c, lookback=lookback,
-        )
-        mask = decode_mask_data_url(job["mask_data_url"])  # [1,H,W]
-        obs_map = assemble_obs_map(mask, policy_features, target_norm, IMAGE_SIZE)
-        feature_dim = int(policy_features.shape[0])
-
-        obs_map_b = obs_map.unsqueeze(0).to(DEVICE)
-        features_b = torch.from_numpy(policy_features).float().unsqueeze(0).to(DEVICE)
-        target_norm_b = torch.tensor([[target_norm]], dtype=torch.float32, device=DEVICE)
-        original_mask_b = mask.unsqueeze(0).to(DEVICE)  # [1,1,H,W]
-
-        # 4. Build the model exactly as cloud_rl/evaluate.py and load the uploaded weights.
-        model = CloudActorCritic(
-            obs_channels=1 + feature_dim + 1,
-            feature_dim=feature_dim,
-            max_actions=max_actions,
-            hidden_dim=hidden_dim,
-        ).to(DEVICE)
-        model.load_state_dict(ckpt["model"])
-        model.eval()
-
-        # 5. Deterministic policy -> action tokens -> rasterized masks.
-        with torch.no_grad():
-            sampled = model.deterministic(obs_map_b, features_b, target_norm_b)
-            rast = rasterize_actions(original_mask_b, sampled["op"], sampled["params"])
-
-        property_maps = rast["property_maps"][0]  # [5,H,W]
-        result = {
-            "original_mask_data_url": tensor_to_data_url(original_mask_b[0, 0]),
-            "generated_mask_data_url": tensor_to_data_url(rast["generated_mask"][0, 0]),
-            "property_maps": {
-                "cloud_probability": tensor_to_data_url(property_maps[0]),
-                "aot_norm": tensor_to_data_url(property_maps[1]),
-                "cloud_layer": tensor_to_data_url(property_maps[2]),
-                "texture_norm": tensor_to_data_url(property_maps[3]),
-                "cirrus_proxy": tensor_to_data_url(property_maps[4]),
-            },
-            "actions": actions_to_jsonable(sampled["op"][0].cpu(), sampled["params"][0].cpu()),
-            "target_temperature_c": target_c,
-            "feature_dim": feature_dim,
-            "lookback": lookback,
-            "normalization": "uploaded_stats" if stats_path else "default_stats",
-        }
-
-    rl_db.mark_completed(job_id, result)
-    log(f"job {job_id} completed ({len(result['actions'])} actions)")
+    images = result.get("images") or {}
+    verification = result.get("verification") or {}
+    payload = {
+        "original_mask_data_url": images.get("original_mask") or images.get("original"),
+        "generated_mask_data_url": images.get("generated_mask") or images.get("generated"),
+        "property_maps": {
+            "generated_cloud_scene": images.get("generated"),
+            "selected_template": images.get("selected_template"),
+            "generated_channels": images.get("channels"),
+            "original_sequence": images.get("original_strip"),
+            "generated_sequence": images.get("generated_strip"),
+        },
+        "actions": [
+            {
+                "source": (result.get("chosen") or {}).get("source"),
+                "mode": (result.get("chosen") or {}).get("mode"),
+                "template_index": (result.get("chosen") or {}).get("template_index"),
+                "template_sample_id": (result.get("chosen") or {}).get("template_sample_id"),
+            }
+        ],
+        "target_temperature_c": target_c,
+        "normalization": "cloud_model_testapp_live",
+        "model": "CloudTemplateSelectorV13 + CloudRadiationV8CleanDirect",
+        "sample": result.get("sample"),
+        "target": result.get("target"),
+        "verification": verification,
+        "selector": result.get("selector"),
+        "chosen": result.get("chosen"),
+        "oracle": result.get("oracle"),
+        "input": result.get("input"),
+        "metrics": {
+            "target_abs_error_wm2": verification.get("target_abs_error_wm2"),
+            "temperature_abs_error_c": verification.get("temperature_abs_error_c"),
+            "verified_temperature_change_c": verification.get("verified_temperature_change_c"),
+            "coverage": verification.get("coverage"),
+            "clear_sky_wm2": verification.get("clear_sky_wm2"),
+        },
+    }
+    rl_db.mark_completed(job_id, payload)
+    log(f"job {job_id} completed mode={(result.get('chosen') or {}).get('mode')}")
 
 
 def main():
-    log(f"starting; queue={'set' if config.DATABASE_URL else 'MISSING'} cloud_rl={CLOUD_RL_DIR}")
-    rl_db.connect()  # fail fast if the queue is unreachable; db self-heals after this
+    log(f"starting; queue={'set' if config.DATABASE_URL else 'MISSING'} new_model={NEW_MODEL_DIR}")
+    rl_db.connect()
     while True:
         try:
             requeued = rl_db.reclaim_stale_jobs(config.WORKER_STALE_MINUTES)
@@ -203,9 +156,6 @@ def main():
                 continue
             try:
                 process_job(job)
-            except urllib.error.URLError as e:
-                log(f"job {job['id']} failed (download): {e}")
-                rl_db.mark_failed(job["id"], f"checkpoint download failed: {str(e)[:500]}")
             except Exception as e:
                 log(f"job {job['id']} crashed: {e}\n{traceback.format_exc()}")
                 rl_db.mark_failed(job["id"], f"inference error: {e}")

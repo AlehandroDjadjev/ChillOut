@@ -40,12 +40,15 @@ Optional values:
 - `COPERNICUS_IMAGE_WIDTH`: defaults to `768`.
 - `COPERNICUS_IMAGE_HEIGHT`: defaults to `480`.
 
-Backend RL runner fallback:
+Backend cloud model inference worker:
 
-- `OPENAI_API_KEY`: set this on the deployed backend/API function, not in browser JavaScript. It is used only when the RL inference runner is submitted without an uploaded `.pt` checkpoint.
-- `OPENAI_IMAGE_MODEL`: optional, defaults to `gpt-image-1.5`.
-- `OPENAI_IMAGE_QUALITY`: optional, defaults to `high`.
-- `OPENAI_IMAGE_SIZE`: optional, defaults to `1024x1024`.
+- `DATABASE_URL`: Postgres queue connection shared by the API and worker.
+- `CLOUD_MODEL_DATA_ROOT`: optional dataset root used by `NewModel/cloud_model_testapp_inference.py`; defaults to `NewModel/dataset_cloudforce_radiation_v6_big_clean`.
+- `CLOUD_SELECTOR_CHECKPOINT`: selector weights path; defaults to `NewModel/cloud_template_selector_v13/best_selector.pt`.
+- `CLOUD_REWARD_CHECKPOINT`: reward/radiation model weights path; defaults to `NewModel/runs/cloud_radiation_v8_clean_direct1/best.pt`.
+- `CLOUD_MODEL_FORCE_CPU`: optional `1` to force CPU inference.
+- `CLOUD_MODEL_RUN_ORACLE`: optional `0` to skip the oracle template search.
+- `CLOUD_MODEL_WM2_PER_C`: optional temperature/radiation proxy scale, default `80`.
 
 ## Security Note
 

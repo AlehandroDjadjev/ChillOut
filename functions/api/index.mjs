@@ -5,15 +5,13 @@
  * 30s/512MB/no MPI); it validates scenarios and queues jobs in Postgres. A separate WRF
  * worker daemon on the VM picks up `status='created'` rows and runs the real model.
  *
- * Env: DATABASE_URL (Postgres), STORAGE_BUCKET (S3), OPENKBS_PROJECT_ID,
- * OPENAI_API_KEY (optional RL no-checkpoint image fallback).
+ * Env: DATABASE_URL (Postgres), STORAGE_BUCKET (S3), OPENKBS_PROJECT_ID.
  */
 import { validateScenario, STATUSES } from './lib/schema.mjs';
 import { ensureSchema, createSimulationRow, getSimulationRow, listSimulationRows } from './lib/db.mjs';
 import { fetchSentinel2Png } from './lib/sentinel2.mjs';
 import { ensureInferenceSchema, createInferenceJob, getInferenceJob } from './lib/inference_db.mjs';
 import { buildSample } from './lib/build_sample.mjs';
-import { generateCloudMaskFallback } from './lib/openai_image_fallback.mjs';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -145,29 +143,19 @@ export const handler = async (event) => {
 
       case 'createInference': {
         if (!body.mask_data_url) return json(400, { error: 'mask_data_url required' });
-        if (!Array.isArray(body.raw_features) || body.raw_features.length !== 14) {
-          return json(400, { error: 'raw_features must be a 14-number array' });
+        if (!body.sample || typeof body.sample !== 'object') {
+          return json(400, { error: 'sample required; build it with buildSample for the same date as the mask' });
         }
-        if (!body.checkpoint_key) {
-          const result = await generateCloudMaskFallback({
-            maskDataUrl: body.mask_data_url,
-            targetTemperatureC: body.target_temperature_c,
-            place: body.place,
-            date: body.date,
-          });
-          return json(200, {
-            id: null,
-            status: 'completed',
-            mode: 'openai_image_fallback',
-            result,
-          });
+        if (!Array.isArray(body.raw_features)) {
+          return json(400, { error: 'raw_features must be an array' });
         }
         await ensureInferenceSchema();
         const row = await createInferenceJob({
-          checkpoint_key: body.checkpoint_key,
-          stats_key: body.stats_key,
+          checkpoint_key: null,
+          stats_key: null,
           mask_data_url: body.mask_data_url,
           raw_features: body.raw_features,
+          sample: body.sample,
           target_temp: body.target_temperature_c,
           place: body.place,
           date: body.date,

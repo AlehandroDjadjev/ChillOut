@@ -12,13 +12,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 import torch
 import torch.nn.functional as F
 
 import train_cloud_radiation_bottom_v8_CLEAN_DIRECT as v8
 import train_cloud_template_selector_v13 as v13
+
+MODULE_DIR = Path(__file__).resolve().parent
 
 
 CHANNEL_NAMES_8 = [
@@ -49,6 +51,18 @@ def parse_channels(s: str, max_c: int) -> List[int]:
         if 0 <= value < max_c:
             out.append(value)
     return out
+
+
+def resolve_local_path(path: Path) -> Path:
+    """Resolve relative model/data paths from either cwd or this module folder."""
+    if path.is_absolute():
+        return path
+    if path.exists():
+        return path.resolve()
+    candidate = MODULE_DIR / path
+    if candidate.exists():
+        return candidate
+    return candidate
 
 
 def clamp_target_loss(target: torch.Tensor, clear: torch.Tensor) -> Tuple[torch.Tensor, bool]:
@@ -265,6 +279,35 @@ def png_data_url(image: Image.Image) -> str:
     return f"data:image/png;base64,{b64}"
 
 
+def tensor_channel_data_url(seq: torch.Tensor, channel: int = 0, frame: int = -1, size: int = 320) -> str:
+    arr = seq.detach().cpu().float()
+    if arr.ndim == 5:
+        arr = arr[0]
+    plane = arr[frame, max(0, min(channel, arr.size(1) - 1))].numpy()
+    im = Image.fromarray((np.clip(plane, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L")
+    im = im.resize((size, size), Image.Resampling.BILINEAR)
+    return png_data_url(im.convert("RGB"))
+
+
+def data_url_to_live_cloud_tensor(data_url: str, height: int, width: int, lookback: int) -> torch.Tensor:
+    b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+    raw = base64.b64decode(b64)
+    base_img = Image.open(io.BytesIO(raw)).convert("L").resize((width, height), Image.Resampling.BILINEAR)
+    prob = np.asarray(base_img, dtype=np.float32) / 255.0
+    smooth_img = base_img.filter(ImageFilter.GaussianBlur(radius=max(1.0, min(height, width) / 80.0)))
+    smooth = np.asarray(smooth_img, dtype=np.float32) / 255.0
+    mask = (prob >= 0.35).astype(np.float32)
+    gy, gx = np.gradient(smooth)
+    texture = np.clip(np.sqrt(gx * gx + gy * gy) * 6.0, 0.0, 1.0).astype(np.float32)
+    high = np.clip(prob * (0.60 + 0.25 * texture), 0.0, 1.0)
+    medium = np.clip(smooth * 0.70, 0.0, 1.0)
+    cirrus = np.clip((smooth - mask * 0.15) * 0.25, 0.0, 1.0)
+    aot = np.clip(0.08 + prob * 0.22, 0.0, 1.0)
+    frame = np.stack([mask, prob, smooth, cirrus, high, medium, aot, texture], axis=0).astype(np.float32)
+    seq = np.stack([frame for _ in range(max(1, int(lookback)))], axis=0)
+    return torch.from_numpy(seq)
+
+
 def record_temperature_meta(record: Dict[str, Any]) -> Dict[str, Any]:
     current = record.get("current_temperature_c")
     target = record.get("target_temperature_c", record.get("target"))
@@ -286,13 +329,14 @@ def record_temperature_meta(record: Dict[str, Any]) -> Dict[str, Any]:
 @dataclass
 class InferenceConfig:
     data_root: Path = Path("dataset_cloudforce_radiation_v6_big_clean")
-    selector_checkpoint: Path = Path("runs/cloud_template_selector_v13/best_selector.pt")
+    selector_checkpoint: Path = Path("cloud_template_selector_v13/best_selector.pt")
     reward_checkpoint: Path = Path("runs/cloud_radiation_v8_clean_direct1/best.pt")
     split: str = "val"
     force_cpu: bool = False
     min_clear_wm2: Optional[float] = None
     idle_offload: bool = True
     max_oracle_batch_size: int = 8
+    load_dataset: bool = True
 
 
 class CloudTemplateInference:
@@ -305,8 +349,12 @@ class CloudTemplateInference:
             torch.backends.cudnn.benchmark = True
             torch.set_float32_matmul_precision("high")
 
-        self.selector_ckpt = torch.load(config.selector_checkpoint, map_location="cpu")
-        self.reward_ckpt = torch.load(config.reward_checkpoint, map_location="cpu")
+        self.config.data_root = resolve_local_path(self.config.data_root)
+        self.config.selector_checkpoint = resolve_local_path(self.config.selector_checkpoint)
+        self.config.reward_checkpoint = resolve_local_path(self.config.reward_checkpoint)
+
+        self.selector_ckpt = torch.load(self.config.selector_checkpoint, map_location="cpu")
+        self.reward_ckpt = torch.load(self.config.reward_checkpoint, map_location="cpu")
         self.train_args = dict(self.selector_ckpt.get("args", {}))
         self.raw_names = list(self.reward_ckpt["raw_feature_names"])
         self.cloud_names = list(self.reward_ckpt["cloud_feature_names"])
@@ -315,23 +363,24 @@ class CloudTemplateInference:
 
         self.records_by_split: Dict[str, List[Dict[str, Any]]] = {}
         self.datasets: Dict[str, Any] = {}
-        for split in ("train", "val", "test"):
-            records = v8.clean_radiation_records(v8.base.load_records(config.data_root, split), self.cleaner, split)
-            self.records_by_split[split] = records
-            self.datasets[split] = v8.RadiationSequenceDataset(
-                root=config.data_root,
-                records=records,
-                raw_names=self.raw_names,
-                cloud_names=self.cloud_names,
-                x_norm=self.x_norm,
-                image_height=int(self.reward_ckpt.get("image_height", 160)),
-                image_width=int(self.reward_ckpt.get("image_width", 160)),
-                lookback=int(self.reward_ckpt.get("lookback", 4)),
-                max_gap_days=float(self.reward_ckpt.get("args", {}).get("max_gap_days", 12.0)),
-                use_cloud_tensor=bool(self.reward_ckpt.get("args", {}).get("use_cloud_tensor", True)),
-                augment=False,
-                min_clear_wm2=float(self.cleaner.min_clear_wm2),
-            )
+        if config.load_dataset:
+            for split in ("train", "val", "test"):
+                records = v8.clean_radiation_records(v8.base.load_records(config.data_root, split), self.cleaner, split)
+                self.records_by_split[split] = records
+                self.datasets[split] = v8.RadiationSequenceDataset(
+                    root=config.data_root,
+                    records=records,
+                    raw_names=self.raw_names,
+                    cloud_names=self.cloud_names,
+                    x_norm=self.x_norm,
+                    image_height=int(self.reward_ckpt.get("image_height", 160)),
+                    image_width=int(self.reward_ckpt.get("image_width", 160)),
+                    lookback=int(self.reward_ckpt.get("lookback", 4)),
+                    max_gap_days=float(self.reward_ckpt.get("args", {}).get("max_gap_days", 12.0)),
+                    use_cloud_tensor=bool(self.reward_ckpt.get("args", {}).get("use_cloud_tensor", True)),
+                    augment=False,
+                    min_clear_wm2=float(self.cleaner.min_clear_wm2),
+                )
 
         self.codebook = self.selector_ckpt["codebook"].float()
         self.codebook_meta = list(self.selector_ckpt.get("codebook_meta", []))
@@ -601,6 +650,238 @@ class CloudTemplateInference:
                 "channels": png_data_url(tensor_channel_grid(chosen_output, self.view_channels)),
             },
         }
+
+    @torch.no_grad()
+    def generate_live(
+        self,
+        sample: Dict[str, Any],
+        mask_data_url: str,
+        target_temperature_c: float,
+        target_loss_wm2: Optional[float] = None,
+        wm2_per_c: float = 80.0,
+        input_mode: str = "full",
+        run_oracle: bool = True,
+        oracle_batch_size: int = 32,
+        penalty_l1: float = 25.0,
+        penalty_coverage: float = 80.0,
+        max_coverage: Optional[float] = None,
+        seed: int = 123,
+    ) -> Dict[str, Any]:
+        """Run the model-test-app selector on a live Sentinel-2 mask + same-date weather sample.
+
+        The trained selector expects a lookback of 8-channel Sentinel tensors and v6/v8 radiation
+        context. A live page only has one mask image, so we repeat that mask across the lookback and
+        synthesize the missing S2 channels from the mask texture. Weather/radiation fields come from
+        build_sample.mjs for the same selected date.
+        """
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+
+        lookback = int(self.reward_ckpt.get("lookback", 4))
+        image_height = int(self.reward_ckpt.get("image_height", 160))
+        image_width = int(self.reward_ckpt.get("image_width", 160))
+        image = data_url_to_live_cloud_tensor(mask_data_url, image_height, image_width, lookback).unsqueeze(0).to(self.device).float()
+
+        live_record = self._live_record_from_sample(sample, target_temperature_c)
+        raw = self._live_raw_vector(live_record)
+        raw_norm = self.x_norm.transform(raw)
+        raw_to_idx = {name: i for i, name in enumerate(self.raw_names)}
+        cloud_idx = [raw_to_idx[name] for name in self.cloud_names if name in raw_to_idx]
+        cloud_vec = raw_norm[cloud_idx].astype(np.float32)
+        cloud = torch.from_numpy(np.stack([cloud_vec for _ in range(lookback)], axis=0)).unsqueeze(0).to(self.device).float()
+        context = torch.from_numpy(v8.record_context_features(live_record)).unsqueeze(0).to(self.device).float()
+        rb = v8.base.radiation_bundle(live_record)
+        clear = torch.tensor([[float(rb["clear_wm2"])]], dtype=torch.float32, device=self.device)
+        actual = torch.tensor([[float(rb["loss_wm2"])]], dtype=torch.float32, device=self.device)
+
+        current_temp = live_record.get("current_temperature_c")
+        try:
+            current_temp_f = float(current_temp)
+        except Exception:
+            current_temp_f = None
+        target_temp_f = float(target_temperature_c)
+        target_delta_c = 0.0 if current_temp_f is None else target_temp_f - current_temp_f
+
+        requested_delta_wm2 = None
+        if target_loss_wm2 is None:
+            requested_delta_wm2 = c_delta_to_wm2_delta(target_delta_c, wm2_per_c)
+            target = actual + float(requested_delta_wm2)
+            target_mode = "absolute_temperature_proxy"
+        else:
+            target = torch.tensor([[float(target_loss_wm2)]], dtype=torch.float32, device=self.device)
+            target_mode = "absolute_loss_wm2"
+        target, target_was_clamped = clamp_target_loss(target, clear)
+
+        input_img, _dropped, input_info = make_input(image, input_mode, self.train_args)
+        base_pred, _ = reward_forward(self.reward_model, image, cloud, self.cloud_names, self.raw_mean, self.raw_std, context, clear)
+        input_pred, cloud_input = reward_forward(self.reward_model, input_img, cloud, self.cloud_names, self.raw_mean, self.raw_std, context, clear)
+
+        inp_cov = v13.batch_coverage(input_img, self.cov_channels)
+        template_logits, mode_logits = self.selector(input_img, context, clear, actual, target, input_pred["loss_wm2"], inp_cov)
+        tau = max(1e-6, float(self.train_args.get("eval_tau", 0.20)))
+        template_probs = F.softmax(template_logits / tau, dim=-1)
+        mode_probs = F.softmax(mode_logits / tau, dim=-1)
+        template_idx = int(template_probs.argmax(dim=-1).item())
+        mode_idx = int(mode_probs.argmax(dim=-1).item())
+
+        selector_template = self.codebook[template_idx:template_idx + 1]
+        selector_mode = torch.zeros(1, len(self.mode_names), device=self.device)
+        selector_mode[:, mode_idx] = 1.0
+        selector_output = v13.apply_modes(input_img, selector_template, selector_mode, self.edit_channels)
+        selector_pred, _ = reward_forward(self.reward_model, selector_output, cloud_input, self.cloud_names, self.raw_mean, self.raw_std, context, clear)
+
+        chosen_output = selector_output
+        chosen_template = selector_template
+        chosen_row = self._result_row(
+            "selector",
+            template_idx,
+            mode_idx,
+            selector_pred["loss_wm2"],
+            target,
+            input_img,
+            selector_output,
+            selector_template,
+        )
+        oracle_row: Optional[Dict[str, Any]] = None
+        if run_oracle:
+            oracle_row, oracle_output, oracle_template = self._oracle_search(
+                input_img=input_img,
+                cloud=cloud_input,
+                context=context,
+                clear=clear,
+                target=target,
+                oracle_batch_size=max(1, int(oracle_batch_size)),
+                penalty_l1=float(penalty_l1),
+                penalty_coverage=float(penalty_coverage),
+                max_coverage=max_coverage,
+            )
+            chosen_output = oracle_output
+            chosen_template = oracle_template
+            chosen_row = oracle_row
+
+        final_pred, _ = reward_forward(self.reward_model, chosen_output, cloud_input, self.cloud_names, self.raw_mean, self.raw_std, context, clear)
+        final_loss = float(final_pred["loss_wm2"].item())
+        actual_loss = float(actual.item())
+        target_loss = float(target.item())
+        clear_loss = float(clear.item())
+        verified_delta_c = wm2_delta_to_c_delta(final_loss - actual_loss, wm2_per_c)
+        target_delta_c_proxy = wm2_delta_to_c_delta(target_loss - actual_loss, wm2_per_c)
+        base_delta_c_proxy = wm2_delta_to_c_delta(float(base_pred["loss_wm2"].item()) - actual_loss, wm2_per_c)
+        input_delta_c_proxy = wm2_delta_to_c_delta(float(input_pred["loss_wm2"].item()) - actual_loss, wm2_per_c)
+
+        top_templates = []
+        probs = template_probs[0].detach().cpu().numpy()
+        for ti in np.argsort(-probs)[:8]:
+            meta = self.codebook_meta[int(ti)] if int(ti) < len(self.codebook_meta) else {}
+            top_templates.append({
+                "template_index": int(ti),
+                "prob": float(probs[ti]),
+                "sample_id": str(meta.get("sample_id", "")),
+                "location": str(meta.get("location", "")),
+                "coverage": self._finite_float(meta.get("coverage")),
+            })
+
+        mode_rows = []
+        mode_np = mode_probs[0].detach().cpu().numpy()
+        for mi, prob in enumerate(mode_np):
+            mode_rows.append({"mode": self.mode_names[mi], "prob": float(prob)})
+        mode_rows.sort(key=lambda row: -row["prob"])
+
+        return {
+            "sample": {
+                "split": "live",
+                "sample_index": None,
+                "sample_id": str(sample.get("sample_id", "live_sample")),
+                "location": str(sample.get("city", sample.get("place", ""))),
+                "anchor": str(live_record.get("anchor", "")),
+                "current_temperature_c": current_temp_f,
+                "requested_target_temperature_c": target_temp_f,
+                "requested_delta_c": None if current_temp_f is None else target_temp_f - current_temp_f,
+            },
+            "target": {
+                "mode": target_mode,
+                "requested_delta_c": None if target_loss_wm2 is not None else float(target_delta_c),
+                "target_delta_c_proxy": target_delta_c_proxy,
+                "wm2_per_c": float(wm2_per_c),
+                "requested_delta_wm2": requested_delta_wm2,
+                "target_loss_wm2": target_loss,
+                "target_was_clamped": target_was_clamped,
+            },
+            "verification": {
+                "actual_dataset_loss_wm2": actual_loss,
+                "clear_sky_wm2": clear_loss,
+                "bottom_original_loss_wm2": float(base_pred["loss_wm2"].item()),
+                "bottom_input_loss_wm2": float(input_pred["loss_wm2"].item()),
+                "bottom_generated_loss_wm2": final_loss,
+                "target_abs_error_wm2": abs(final_loss - target_loss),
+                "requested_temperature_change_c": None if target_loss_wm2 is not None else float(target_delta_c),
+                "verified_temperature_change_c": verified_delta_c,
+                "target_temperature_change_proxy_c": target_delta_c_proxy,
+                "original_temperature_change_proxy_c": base_delta_c_proxy,
+                "input_temperature_change_proxy_c": input_delta_c_proxy,
+                "temperature_abs_error_c": abs(verified_delta_c - target_delta_c_proxy),
+                "generated_attenuation": float(final_pred["attenuation"].item()),
+                "coverage": batch_coverage(chosen_output, self.cov_channels),
+            },
+            "selector": {
+                "template_index": template_idx,
+                "mode": self.mode_names[mode_idx],
+                "pred_loss_wm2": float(selector_pred["loss_wm2"].item()),
+                "abs_error_wm2": abs(float(selector_pred["loss_wm2"].item()) - target_loss),
+                "coverage": batch_coverage(selector_output, self.cov_channels),
+                "top_templates": top_templates,
+                "mode_probs": mode_rows,
+            },
+            "chosen": chosen_row,
+            "oracle": oracle_row,
+            "input": {**input_info, "live_sentinel_mask_repeated_as_lookback": True},
+            "images": {
+                "original": png_data_url(tensor_to_cloud_photo(image)),
+                "model_input": png_data_url(tensor_to_cloud_photo(input_img)),
+                "selected_template": png_data_url(tensor_to_cloud_photo(chosen_template)),
+                "generated": png_data_url(tensor_to_cloud_photo(chosen_output)),
+                "original_mask": tensor_channel_data_url(image, channel=0),
+                "generated_mask": tensor_channel_data_url(chosen_output, channel=0),
+                "original_strip": png_data_url(tensor_to_strip(image)),
+                "generated_strip": png_data_url(tensor_to_strip(chosen_output)),
+                "channels": png_data_url(tensor_channel_grid(chosen_output, self.view_channels)),
+            },
+        }
+
+    def _live_record_from_sample(self, sample: Dict[str, Any], target_temperature_c: float) -> Dict[str, Any]:
+        date = str(sample.get("date") or "")[:10]
+        anchor = sample.get("anchor")
+        if date:
+            anchor = f"{date}T12:00:00Z"
+        inputs = dict(sample.get("cloudforce_world_inputs") or {})
+        inputs.update({k: v for k, v in (sample.get("model_inputs") or {}).items() if k not in inputs})
+        current_temp = sample.get("current_temperature_c", sample.get("observed_temperature_c"))
+        return {
+            "sample_id": sample.get("sample_id", "live_sample"),
+            "location": sample.get("city", sample.get("place", "live")),
+            "city": sample.get("city", sample.get("place", "live")),
+            "date": date,
+            "anchor": anchor,
+            "lat": sample.get("lat", 0.0),
+            "lon": sample.get("lon", 0.0),
+            "current_temperature_c": current_temp,
+            "target_temperature_c": target_temperature_c,
+            "inputs": inputs,
+        }
+
+    def _live_raw_vector(self, record: Dict[str, Any]) -> np.ndarray:
+        values = np.asarray(self.x_norm.mean, dtype=np.float32).copy()
+        inputs = record.get("inputs") or {}
+        for i, name in enumerate(self.raw_names):
+            raw = inputs.get(name)
+            try:
+                value = float(raw)
+            except Exception:
+                continue
+            if math.isfinite(value):
+                values[i] = value
+        return values
 
     def _finite_float(self, value: Any) -> Optional[float]:
         try:

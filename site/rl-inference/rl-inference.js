@@ -12,8 +12,6 @@
     preset: document.getElementById("presetSelect"),
     date: document.getElementById("dateInput"),
     target: document.getElementById("targetInput"),
-    checkpoint: document.getElementById("checkpointInput"),
-    stats: document.getElementById("statsInput"),
     sampleBtn: document.getElementById("sampleBtn"),
     runBtn: document.getElementById("runBtn"),
     status: document.getElementById("status"),
@@ -67,7 +65,7 @@
       el.originalCaption.textContent = "Sentinel-2 cloud mask - " + sample.date;
       renderFeatureTable();
       renderPayload();
-      setStatus("Mask ready for " + sample.sample_id + ". Upload a checkpoint or run the AI fallback.", "ok");
+      setStatus("Mask ready for " + sample.sample_id + ". Run the local cloud model inference worker.", "ok");
     } catch (error) {
       setStatus("Could not build the mask: " + (error.message || String(error)), "error");
     } finally {
@@ -76,7 +74,6 @@
   }
 
   async function runInference() {
-    var checkpointFile = el.checkpoint.files && el.checkpoint.files[0];
     var target = Number(el.target.value);
     if (!Number.isFinite(target)) {
       setStatus("Enter a valid target temperature.", "error");
@@ -88,50 +85,19 @@
     }
 
     setBusy(true);
-    el.modePill.textContent = "uploading";
+    el.modePill.textContent = "queued";
     try {
-      var jobUuid = (window.crypto && crypto.randomUUID)
-        ? crypto.randomUUID()
-        : "job-" + Date.now() + "-" + Math.random().toString(16).slice(2);
-
-      var checkpointKey = null;
-      if (checkpointFile) {
-        setStatus("Uploading checkpoint to storage...");
-        var ckptUp = await C.fetchUploadUrl(jobUuid, "checkpoint.pt", "application/octet-stream");
-        await C.uploadFile(ckptUp.uploadUrl, checkpointFile);
-        checkpointKey = ckptUp.key;
-      } else {
-        setStatus("No checkpoint uploaded. Running AI image fallback...");
-        el.modePill.textContent = "AI fallback";
-      }
-
-      var statsKey = null;
-      var statsFile = el.stats.files && el.stats.files[0];
-      if (checkpointFile && statsFile) {
-        setStatus("Uploading stats.json...");
-        var statsUp = await C.fetchUploadUrl(jobUuid, "stats.json", "application/json");
-        await C.uploadFile(statsUp.uploadUrl, statsFile);
-        statsKey = statsUp.key;
-      }
-
-      setStatus("Queueing inference job...");
+      setStatus("Queueing cloud model test app inference job...");
       el.modePill.textContent = "queued";
       var created = await C.createInference({
-        checkpoint_key: checkpointKey,
-        stats_key: statsKey,
         mask_data_url: originalMaskDataUrl,
         raw_features: sample.feature_vector,
+        sample: sample,
         target_temperature_c: target,
         place: sample.sample_id,
         date: sample.date
       });
       renderPayload(created);
-      if (created.status === "completed" && created.result) {
-        renderResult(created.result);
-        el.modePill.textContent = created.mode || "fallback";
-        setStatus("AI fallback image complete.", "ok");
-        return;
-      }
       await pollResult(created.id);
     } catch (error) {
       el.modePill.textContent = "error";
@@ -169,7 +135,7 @@
             resolve();
             return;
           }
-          setStatus("Worker is " + (res.status || "running") + "... (checkpoint loads + inference run on the VM)");
+          setStatus("Worker is " + (res.status || "running") + "... (loading local model test app weights + running inference)");
           setTimeout(tick, 3000);
         }).catch(function (error) {
           polling = false;
@@ -188,7 +154,7 @@
     }
     if (result.generated_mask_data_url) {
       el.generatedImage.src = result.generated_mask_data_url;
-      el.generatedCaption.textContent = result.fallback ? "AI fallback overlay" : "Generated mask";
+      el.generatedCaption.textContent = "Generated mask";
     }
     var maps = result.property_maps || {};
     el.propertyMaps.innerHTML = Object.keys(maps).map(function (name) {
@@ -197,15 +163,23 @@
     }).join("");
 
     var actions = result.actions || [];
-    var normalizationLabel = result.fallback
-      ? "OpenAI fallback"
-      : (result.normalization === "uploaded_stats" ? "uploaded" : "default");
+    var metrics = result.metrics || {};
+    var verification = result.verification || {};
+    var normalizationLabel = result.normalization || "cloud model";
     el.metrics.innerHTML = [
       metric(String(actions.length), "Actions emitted"),
       metric(Number.isFinite(Number(result.target_temperature_c)) ? Number(result.target_temperature_c).toFixed(1) + " C" : "-", "Target temperature"),
-      metric(normalizationLabel, "Mode")
+      metric(normalizationLabel, "Mode"),
+      metric(Number.isFinite(Number(metrics.temperature_abs_error_c || verification.temperature_abs_error_c)) ? Number(metrics.temperature_abs_error_c || verification.temperature_abs_error_c).toFixed(2) + " C" : "-", "Temp proxy error"),
+      metric(Number.isFinite(Number(metrics.clear_sky_wm2 || verification.clear_sky_wm2)) ? Number(metrics.clear_sky_wm2 || verification.clear_sky_wm2).toFixed(1) + " W/m2" : "-", "Clear sky proxy")
     ].join("");
-    el.actions.textContent = JSON.stringify(actions, null, 2);
+    el.actions.textContent = JSON.stringify({
+      actions: actions,
+      target: result.target,
+      verification: result.verification,
+      chosen: result.chosen,
+      selector: result.selector
+    }, null, 2);
   }
 
   function renderFeatureTable() {
@@ -215,9 +189,15 @@
       }).join("");
       return;
     }
-    el.table.innerHTML = C.FEATURE_NAMES.map(function (name, index) {
-      return "<tr><th>" + C.escapeHtml(name) + "</th><td>" +
-        C.escapeHtml(sample.feature_vector[index]) + "</td></tr>";
+    var legacyRows = C.FEATURE_NAMES.map(function (name, index) {
+      return { name: name, value: sample.feature_vector[index] };
+    });
+    var modelRows = Object.keys(sample.cloudforce_world_inputs || {}).map(function (name) {
+      return { name: name, value: sample.cloudforce_world_inputs[name] };
+    });
+    el.table.innerHTML = legacyRows.concat(modelRows).map(function (row) {
+      return "<tr><th>" + C.escapeHtml(row.name) + "</th><td>" +
+        C.escapeHtml(row.value) + "</td></tr>";
     }).join("");
   }
 
@@ -228,9 +208,12 @@
       date: sample.date,
       target_temperature_c: Number(el.target.value),
       raw_features: sample.feature_vector,
+      sample: {
+        sample_id: sample.sample_id,
+        date: sample.date,
+        cloudforce_world_inputs: sample.cloudforce_world_inputs || null
+      },
       mask_data_url: originalMaskDataUrl ? "[data-url omitted]" : null,
-      checkpoint_key: (el.checkpoint.files && el.checkpoint.files[0]) ? "media/inference/<uuid>/checkpoint.pt" : null,
-      fallback_without_checkpoint: !(el.checkpoint.files && el.checkpoint.files[0]),
       job: created ? { id: created.id, status: created.status } : null
     } : {};
     el.payload.textContent = JSON.stringify(payload, null, 2);
